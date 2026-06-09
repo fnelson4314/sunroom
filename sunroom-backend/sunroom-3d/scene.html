@@ -1,0 +1,603 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background: #000;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+      (async function main() {
+        try {
+          const params = new URLSearchParams(location.search);
+          const payload = JSON.parse(atob(params.get("config")));
+          await renderScene(payload);
+        } catch (err) {
+          window.__error = err.message;
+          console.error("[scene error]", err.message, err.stack);
+        }
+      })();
+
+      function fcHex(name) {
+        return (
+          { white: 0xe2e2e2, tan: 0xb89a6a, bronze: 0x3e2810 }[name] ?? 0xe2e2e2
+        );
+      }
+      function rgbHex(r, g, b) {
+        return (r << 16) | (g << 8) | b;
+      }
+      function darken(hex, amt) {
+        return rgbHex(
+          Math.max(0, ((hex >> 16) & 0xff) - amt),
+          Math.max(0, ((hex >> 8) & 0xff) - amt),
+          Math.max(0, (hex & 0xff) - amt),
+        );
+      }
+      function lighten(hex, amt) {
+        return rgbHex(
+          Math.min(255, ((hex >> 16) & 0xff) + amt),
+          Math.min(255, ((hex >> 8) & 0xff) + amt),
+          Math.min(255, (hex & 0xff) + amt),
+        );
+      }
+
+      function glassMat(hex, opacity = 0.28) {
+        return new THREE.MeshPhysicalMaterial({
+          color: hex,
+          transparent: true,
+          opacity,
+          roughness: 0.05,
+          metalness: 0.0,
+          side: THREE.DoubleSide,
+        });
+      }
+      function solidMat(hex) {
+        return new THREE.MeshStandardMaterial({
+          color: hex,
+          roughness: 0.65,
+          metalness: 0.05,
+        });
+      }
+      function frameMat(hex) {
+        return new THREE.MeshStandardMaterial({
+          color: hex,
+          roughness: 0.25,
+          metalness: 0.35,
+        });
+      }
+      function shingleMat(hex) {
+        return new THREE.MeshStandardMaterial({
+          color: hex,
+          roughness: 0.93,
+          metalness: 0.0,
+        });
+      }
+
+      function box(w, h, d, mat, x, y, z) {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+        m.position.set(x, y, z);
+        m.castShadow = m.receiveShadow = true;
+        return m;
+      }
+      function frameBorder(w, h, d, fw, mat) {
+        const g = new THREE.Group();
+        g.add(box(w, fw, d, mat, w / 2, fw / 2, 0));
+        g.add(box(w, fw, d, mat, w / 2, h - fw / 2, 0));
+        g.add(box(fw, h, d, mat, fw / 2, h / 2, 0));
+        g.add(box(fw, h, d, mat, w - fw / 2, h / 2, 0));
+        return g;
+      }
+
+      function buildPanel(unit, w, h, fw, fc) {
+        const g = new THREE.Group(),
+          fmat = frameMat(fc),
+          D = 0.07;
+        const pt = unit.panel_type;
+        const hasTransom = [
+          "fixed_transom",
+          "fixed_tk",
+          "oper_tk",
+          "door_t",
+        ].includes(pt);
+        const hasKneewall = [
+          "fixed_kneewall",
+          "fixed_tk",
+          "oper_kneewall",
+          "oper_tk",
+        ].includes(pt);
+        const isDoor = ["door", "door_t"].includes(pt);
+        const isOper = pt.startsWith("oper");
+        const isSolid = pt === "solid_panel";
+        let tH = unit.transom_h_in > 0 ? unit.transom_h_in / 12 : h * 0.18;
+        let kH = unit.kneewall_h_in > 0 ? unit.kneewall_h_in / 12 : h * 0.22;
+        if (hasTransom && hasKneewall && tH + kH > h * 0.7) {
+          tH = kH = h * 0.25;
+        }
+        if (hasTransom) {
+          const tmat =
+            unit.transom_mat === "glass"
+              ? glassMat(0xafdaf2, 0.38)
+              : solidMat(0xc8bcaa);
+          g.add(box(w - fw * 2, tH, D, tmat, w / 2, h - tH / 2, 0));
+          g.add(box(w, fw, D * 1.2, fmat, w / 2, h - tH - fw / 2, 0));
+        }
+        const topY = hasTransom ? h - tH - fw : h;
+        const botY = hasKneewall ? kH + fw : 0;
+        const glH = Math.max(0.05, topY - botY);
+        const glCY = botY + glH / 2;
+        const mainMat = isSolid
+          ? solidMat(0xdcd0be)
+          : isDoor
+            ? glassMat(0x64a8d2, 0.32)
+            : isOper
+              ? glassMat(0x8cc3e4, 0.3)
+              : glassMat(0xa8d8f0, 0.28);
+        g.add(box(w - fw * 2, glH, D, mainMat, w / 2, glCY, 0));
+        if (isDoor && ["sliding", "french"].includes(unit.door_style)) {
+          g.add(box(fw * 0.5, glH, D * 1.6, fmat, w / 2, glCY, 0.01));
+          g.add(
+            box(
+              fw * 0.3,
+              glH * 0.18,
+              fw * 0.3,
+              solidMat(0x888888),
+              w / 2 + fw * 0.5,
+              glCY,
+              D * 0.8,
+            ),
+          );
+        }
+        if (isOper) g.add(box(fw * 0.4, glH, D * 1.6, fmat, w / 2, glCY, 0.01));
+        if (hasKneewall) {
+          const kmat =
+            unit.kneewall_mat === "solid"
+              ? solidMat(0xc8bcaa)
+              : glassMat(0xa8d8f0, 0.28);
+          g.add(box(w, fw, D * 1.2, fmat, w / 2, kH + fw / 2, 0));
+          g.add(box(w - fw * 2, kH, D, kmat, w / 2, kH / 2, 0));
+        }
+        g.add(frameBorder(w, h, D * 1.4, fw, fmat));
+        return g;
+      }
+
+      function buildWall(wall, fc, roofStyle, shHex, isGable) {
+        const g = new THREE.Group();
+        const fw = wall.frame_width_in / 12,
+          wallW = wall.width_in / 12,
+          wallH = wall.height_in / 12;
+        const fmat = frameMat(fc);
+        let curX = fw;
+        for (const unit of wall.units) {
+          const uw = unit.width_in / 12;
+          const panel = buildPanel(unit, uw, wallH - fw * 2, fw, fc);
+          panel.position.set(curX, fw, 0);
+          g.add(panel);
+          curX += uw;
+        }
+        g.add(frameBorder(wallW, wallH, 0.12, fw, fmat));
+        if (isGable && roofStyle === "gable")
+          g.add(buildGable(wallW, wallH, fw, shHex));
+        return g;
+      }
+
+      function buildGable(wallW, wallH, fw, shHex) {
+        const g = new THREE.Group();
+        const gH = wallH * 0.42,
+          peakX = wallW / 2,
+          peakY = wallH + gH;
+        const shape = new THREE.Shape();
+        shape.moveTo(0, wallH);
+        shape.lineTo(wallW, wallH);
+        shape.lineTo(peakX, peakY);
+        shape.closePath();
+        const face = new THREE.Mesh(
+          new THREE.ShapeGeometry(shape),
+          shingleMat(shHex),
+        );
+        face.position.z = 0.05;
+        face.castShadow = true;
+        g.add(face);
+        const eMat = solidMat(darken(shHex, 40));
+        const lLen = Math.sqrt(peakX ** 2 + gH ** 2),
+          lAng = Math.atan2(gH, peakX);
+        const lEdge = box(
+          lLen,
+          fw * 1.1,
+          0.07,
+          eMat,
+          peakX / 2,
+          wallH + gH / 2,
+          0.06,
+        );
+        lEdge.rotation.z = lAng;
+        g.add(lEdge);
+        const rEdge = box(
+          lLen,
+          fw * 1.1,
+          0.07,
+          eMat,
+          peakX + peakX / 2,
+          wallH + gH / 2,
+          0.06,
+        );
+        rEdge.rotation.z = -lAng;
+        g.add(rEdge);
+        g.add(
+          box(
+            fw * 3,
+            fw * 0.4,
+            0.08,
+            solidMat(lighten(shHex, 40)),
+            peakX,
+            peakY - fw * 0.2,
+            0.07,
+          ),
+        );
+        return g;
+      }
+
+      function buildRoof(wallW_B, wallW_C, wallH, roofStyle, shHex, fc) {
+        const g = new THREE.Group(),
+          smat = shingleMat(shHex),
+          fmat = frameMat(fc),
+          OH = 0.3;
+        if (roofStyle === "gable") {
+          const gH = wallH * 0.42,
+            ridgeZ = wallW_B / 2;
+          const pLen = Math.sqrt(ridgeZ ** 2 + gH ** 2),
+            pAng = Math.atan2(gH, ridgeZ);
+          const lm = new THREE.Mesh(
+            new THREE.PlaneGeometry(wallW_C + OH * 2, pLen + OH),
+            smat,
+          );
+          lm.rotation.x = -(Math.PI / 2 - pAng);
+          lm.position.set(wallW_C / 2, wallH + gH / 2, -ridgeZ / 2);
+          lm.castShadow = lm.receiveShadow = true;
+          g.add(lm);
+          const rm = new THREE.Mesh(
+            new THREE.PlaneGeometry(wallW_C + OH * 2, pLen + OH),
+            shingleMat(darken(shHex, 25)),
+          );
+          rm.rotation.x = Math.PI / 2 - pAng;
+          rm.position.set(wallW_C / 2, wallH + gH / 2, -ridgeZ - ridgeZ / 2);
+          rm.castShadow = rm.receiveShadow = true;
+          g.add(rm);
+          g.add(
+            box(
+              wallW_C + OH * 2,
+              0.08,
+              0.14,
+              fmat,
+              wallW_C / 2,
+              wallH + gH,
+              -ridgeZ,
+            ),
+          );
+          g.add(
+            box(wallW_C + OH * 2, 0.15, 0.1, fmat, wallW_C / 2, wallH, OH / 2),
+          );
+          g.add(
+            box(
+              wallW_C + OH * 2,
+              0.15,
+              0.1,
+              fmat,
+              wallW_C / 2,
+              wallH,
+              -wallW_B - OH / 2,
+            ),
+          );
+        } else {
+          const slope = wallW_B * 0.08,
+            pAng = Math.atan2(slope, wallW_B);
+          const pLen = Math.sqrt(wallW_B ** 2 + slope ** 2) + OH;
+          const rm = new THREE.Mesh(
+            new THREE.PlaneGeometry(wallW_C + OH * 2, pLen),
+            smat,
+          );
+          rm.rotation.x = -(Math.PI / 2 - pAng);
+          rm.position.set(wallW_C / 2, wallH + slope / 2, -wallW_B / 2);
+          rm.castShadow = rm.receiveShadow = true;
+          g.add(rm);
+          g.add(
+            box(wallW_C + OH * 2, 0.15, 0.1, fmat, wallW_C / 2, wallH, OH / 2),
+          );
+        }
+        return g;
+      }
+
+      function buildShadow(wallW_B, wallW_C) {
+        const m = new THREE.Mesh(
+          new THREE.PlaneGeometry(wallW_C * 1.15, wallW_B * 0.65),
+          new THREE.MeshBasicMaterial({
+            color: 0x000000,
+            transparent: true,
+            opacity: 0.2,
+          }),
+        );
+        m.rotation.x = -Math.PI / 2;
+        m.position.set(wallW_C / 2, 0.01, -wallW_B * 0.85);
+        return m;
+      }
+
+      async function sampleShingle(photoDataUrl, photoW, photoH) {
+        const tmp = document.createElement("canvas");
+        tmp.width = photoW;
+        tmp.height = photoH;
+        const tc = tmp.getContext("2d");
+        await new Promise((res, rej) => {
+          const img = new Image();
+          img.onload = () => {
+            tc.drawImage(img, 0, 0, photoW, photoH);
+            res();
+          };
+          img.onerror = rej;
+          img.src = photoDataUrl;
+        });
+        const startY = Math.floor(photoH * 0.08),
+          stripH = Math.floor(photoH * 0.12);
+        const id = tc.getImageData(0, startY, photoW, stripH).data;
+        let r = 0,
+          g = 0,
+          b = 0,
+          cnt = 0;
+        for (let i = 0; i < id.length; i += 4) {
+          r += id[i];
+          g += id[i + 1];
+          b += id[i + 2];
+          cnt++;
+        }
+        return rgbHex(
+          Math.round((r / cnt) * 0.75),
+          Math.round((g / cnt) * 0.75),
+          Math.round((b / cnt) * 0.75),
+        );
+      }
+
+      function worldToScreen(cam, x, y, z, W, H) {
+        const v = new THREE.Vector3(x, y, z).project(cam);
+        return [((v.x + 1) / 2) * W, ((1 - v.y) / 2) * H];
+      }
+
+      async function renderScene(payload) {
+        const {
+          photoDataUrl,
+          camera,
+          walls,
+          roof,
+          frameColour,
+          photoW,
+          photoH,
+        } = payload;
+
+        const canvas = document.getElementById("c");
+        canvas.width = photoW;
+        canvas.height = photoH;
+
+        const renderer = new THREE.WebGLRenderer({
+          canvas,
+          antialias: true,
+          alpha: true,
+        });
+        renderer.setSize(photoW, photoH);
+        renderer.setPixelRatio(1);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.05;
+
+        const scene = new THREE.Scene();
+        await new Promise((res, rej) => {
+          new THREE.TextureLoader().load(
+            photoDataUrl,
+            (tex) => {
+              tex.encoding = THREE.sRGBEncoding;
+              scene.background = tex;
+              res();
+            },
+            undefined,
+            rej,
+          );
+        });
+
+        const bSpec = walls.find((w) => w.wall_id === "B");
+        const cSpec = walls.find((w) => w.wall_id === "C");
+        const wallW_B = (bSpec?.width_in || 216) / 12;
+        const wallW_C = (cSpec?.width_in || 120) / 12;
+        const wallH = (bSpec?.height_in || 96) / 12;
+        const fc = fcHex(frameColour);
+        const roofStyle = roof.style;
+        const shHex = await sampleShingle(photoDataUrl, photoW, photoH);
+        console.log(
+          "[scene] wallW_B:",
+          wallW_B,
+          "wallW_C:",
+          wallW_C,
+          "wallH:",
+          wallH,
+        );
+
+        // ── Camera ──
+        const camX = camera.position.x;
+        const camY = 5.0;
+        const camZ = camera.position.z;
+        const fovY = 98;
+
+        const cam = new THREE.PerspectiveCamera(
+          fovY,
+          photoW / photoH,
+          0.1,
+          500,
+        );
+        cam.position.set(camX, camY, camZ);
+        cam.up.set(0, 1, 0);
+        cam.lookAt(new THREE.Vector3(0, wallH / 2, 0));
+        cam.updateProjectionMatrix();
+        cam.updateMatrixWorld(true);
+
+        // ── Compute offset so pt0 lands on traced pixel position ──
+        // Get camera-space depth of pt0 world position (0, wallH, 0)
+        const pt0_cam = new THREE.Vector3(0, wallH, 0).applyMatrix4(
+          cam.matrixWorldInverse,
+        );
+        const depth = -pt0_cam.z; // positive depth
+
+        const pt0_target = camera.imagePts[0];
+        // Where does pt0 currently render in screen space?
+        const pt0_current = worldToScreen(cam, 0, wallH, 0, photoW, photoH);
+        // Pixel difference
+        const dpx = pt0_target[0] - pt0_current[0];
+        const dpy = pt0_target[1] - pt0_current[1];
+        // Convert pixel difference to world units using the camera's actual scale at pt0 depth
+        // Project two world points that differ by 1 unit and measure pixel difference
+        const p1 = worldToScreen(cam, 0, wallH, 0, photoW, photoH);
+        const p2 = worldToScreen(cam, 1, wallH, 0, photoW, photoH);
+        const pxPerWorldUnit = Math.abs(p2[0] - p1[0]);
+        const offsetX = dpx / pxPerWorldUnit;
+        const p3 = worldToScreen(cam, 0, wallH + 1, 0, photoW, photoH);
+        const pxPerWorldUnitY = Math.abs(p3[1] - p1[1]);
+        const offsetY = -dpy / pxPerWorldUnitY;
+        console.log(
+          "[scene] pt0_current:",
+          pt0_current[0].toFixed(0),
+          pt0_current[1].toFixed(0),
+        );
+        console.log(
+          "[scene] pt0_target:",
+          pt0_target[0].toFixed(0),
+          pt0_target[1].toFixed(0),
+        );
+        console.log(
+          "[scene] pxPerUnit:",
+          pxPerWorldUnit.toFixed(1),
+          "offsetX:",
+          offsetX.toFixed(2),
+          "offsetY:",
+          offsetY.toFixed(2),
+        );
+
+        // ── Compute rotation so house wall aligns with traced points ──
+        const pt0_screen = worldToScreen(cam, 0, wallH, 0, photoW, photoH);
+        const pt1_screen = worldToScreen(
+          cam,
+          wallW_C,
+          wallH,
+          -wallW_B,
+          photoW,
+          photoH,
+        );
+        const pt1_target = camera.imagePts[1];
+        const cur_angle = Math.atan2(
+          pt1_screen[1] - pt0_screen[1],
+          pt1_screen[0] - pt0_screen[0],
+        );
+        const tgt_angle = Math.atan2(
+          pt1_target[1] - pt0_target[1],
+          pt1_target[0] - pt0_target[0],
+        );
+        const rotationY = -(tgt_angle - cur_angle);
+
+        console.log(
+          "[scene] depth:",
+          depth.toFixed(2),
+          "offsetX:",
+          offsetX.toFixed(2),
+          "offsetY:",
+          offsetY.toFixed(2),
+        );
+        console.log(
+          "[scene] cur_angle:",
+          ((cur_angle * 180) / Math.PI).toFixed(1),
+          "tgt_angle:",
+          ((tgt_angle * 180) / Math.PI).toFixed(1),
+          "rotY:",
+          ((rotationY * 180) / Math.PI).toFixed(1),
+        );
+
+        // ── Lighting ──
+        scene.add(new THREE.AmbientLight(0xfff8f0, 0.7));
+        const sun = new THREE.DirectionalLight(0xfff4e0, 1.15);
+        sun.position.set(18, 25, -8);
+        sun.castShadow = true;
+        sun.shadow.mapSize.set(2048, 2048);
+        sun.shadow.camera.near = 0.5;
+        sun.shadow.camera.far = 120;
+        sun.shadow.camera.left = sun.shadow.camera.bottom = -25;
+        sun.shadow.camera.right = sun.shadow.camera.top = 25;
+        sun.shadow.bias = -0.001;
+        scene.add(sun);
+        const fill = new THREE.DirectionalLight(0xc8d8ff, 0.38);
+        fill.position.set(-10, 6, -15);
+        scene.add(fill);
+        scene.add(new THREE.HemisphereLight(0x87ceeb, 0xc8a870, 0.28));
+
+        // ── Geometry ──
+        // Structure:
+        // anchor (positioned at offsetX, offsetY)
+        //   └── rotGroup (positioned at pt0 local coords, rotates around pt0)
+        //         └── sunroom (offset so pt0 is at rotGroup origin)
+
+        const anchor = new THREE.Group();
+        anchor.position.set(offsetX, offsetY, 0);
+
+        const rotGroup = new THREE.Group();
+        rotGroup.position.set(0, wallH, 0); // pivot at pt0 height
+        rotGroup.rotation.y = rotationY;
+        anchor.add(rotGroup);
+
+        const sunroom = new THREE.Group();
+        sunroom.position.set(0, -wallH, 0); // offset back so pt0 = rotGroup origin
+        rotGroup.add(sunroom);
+
+        if (bSpec) {
+          const wallB = buildWall(bSpec, fc, roofStyle, shHex, true);
+          wallB.rotation.y = -Math.PI / 2;
+          wallB.position.set(0, 0, -wallW_B);
+          sunroom.add(wallB);
+        }
+
+        if (cSpec) {
+          const wallC = buildWall(cSpec, fc, roofStyle, shHex, false);
+          wallC.rotation.y = Math.PI;
+          wallC.scale.x = -1;
+          wallC.position.set(0, 0, 0);
+          sunroom.add(wallC);
+        }
+
+        sunroom.add(buildRoof(wallW_B, wallW_C, wallH, roofStyle, shHex, fc));
+        sunroom.add(buildShadow(wallW_B, wallW_C));
+
+        // Debug spheres — at PnP world positions in negated-Z space
+        const mkSphere = (x, y, z, col) => {
+          const s = new THREE.Mesh(
+            new THREE.SphereGeometry(0.4, 16, 16),
+            new THREE.MeshBasicMaterial({ color: col }),
+          );
+          s.position.set(x, y, z);
+          return s;
+        };
+        sunroom.add(mkSphere(0, wallH, -wallW_B, 0xff0000)); // pt0: left house wall top
+        sunroom.add(mkSphere(wallW_C, wallH, 0, 0x00ff00)); // pt1: right house wall top
+        sunroom.add(mkSphere(wallW_C, 0, 0, 0xffff00)); // pt2: right house wall bottom
+        sunroom.add(mkSphere(0, 0, 0, 0x0000ff)); // pt4: front corner ground
+
+        scene.add(anchor);
+
+        renderer.render(scene, cam);
+        const dataURL = canvas.toDataURL("image/jpeg", 0.95);
+        if (window.__done) window.__done(dataURL);
+      }
+    </script>
+  </body>
+</html>
