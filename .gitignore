@@ -1,0 +1,7 @@
+# C:\Users\fnels\sunroom\.gitignore
+sunroom-backend/venv/
+sunroom-backend/sunroom-3d/node_modules/
+sunroom-app/node_modules/
+*.pyc
+__pycache__/
+.env
