@@ -11,7 +11,7 @@ LORA_URLS: dict[tuple[str, str], str] = {
 
     # Three season (4_inch)
     ("4_inch", "studio"):        "",  # fill after training 3season_studio
-    ("4_inch", "gable"):         "https://replicate.delivery/xezq/MjVCv8iKQxIrFdIqEvUAf0eO6VqPkmyr0bcL0Zsqcki2zprWA/trained_model.tar",  # fill after training 3season_gable
+    ("4_inch", "gable"):         "https://replicate.delivery/xezq/a9PZ7kOJhdICEtby0VuNI4gOh3ih3n1zGdK7WpLvabABsnrF/trained_model.tar",  # fill after training 3season_gable
     ("4_inch", "under_existing"): "", # NO training data — falls back to base model
 
     # All season (6_inch)

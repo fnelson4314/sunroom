@@ -6,13 +6,19 @@ logger = logging.getLogger(__name__)
 
 # ─── Prompt constants ─────────────────────────────────────────────────────────
 
-QUALITY_PREFIX = (
-    "SUNRM photorealistic photograph, house exterior, "
-    "aluminum sunroom with shingled roof matching house, "
-    "white aluminum frame, attached to brick house, "
-)
+# Built per-render with the ACTUAL frame colour so it never conflicts with the
+# config (was hardcoded "white ... brick house"). Matches the LoRA's training
+# caption style: "SUNRM, a <colour> aluminum-framed sunroom ...". The roof,
+# house type, and "attached" wording are intentionally NOT here — the roof is
+# described once by roof_fragment, and the real house is already in the photo.
+def quality_prefix(frame_color: str) -> str:
+    color = (frame_color or "white").strip().lower()
+    return (
+        f"SUNRM, photorealistic exterior photo of a {color} aluminum-framed "
+        f"sunroom with glass walls attached to the house, "
+    )
 
-QUALITY_SUFFIX = "natural daylight, consistent shadows, attached to house wall"
+QUALITY_SUFFIX = "natural daylight, consistent shadows"
 
 NEGATIVE_PROMPT = (
     "glass roof, transparent roof, polycarbonate roof, glass ceiling, greenhouse roof, "
@@ -50,10 +56,10 @@ PANEL_TYPE_DESCRIPTIONS = {
 }
 
 DOOR_STYLE_DESCRIPTIONS = {
-    "sliding": "sliding glass door",
-    "entry":   "entry door",
+    "sliding": "wide sliding glass patio door with two large full-height glass panels that slide horizontally and a vertical pull handle, not a hinged entry door",
+    "entry":   "single hinged entry door",
     "storm":   "storm door",
-    "french":  "french door",
+    "french":  "french double doors, two hinged glass doors",
 }
 
 WALL_POSITION = {
@@ -240,23 +246,32 @@ def build_prompt(
     wall_data: str = "",
     roof_style: str = "",
     wall_system: str = "",
+    wall_color: str = "white",
 ) -> tuple[str, str]:
     """
-    Build (positive_prompt, negative_prompt) for FLUX Fill inpainting.
+    Build (positive_prompt, negative_prompt) for the AI repaint step.
 
-    Order: quality prefix → wall structure → option fragments → quality suffix.
+    Order: quality prefix (with frame colour) → roof → wall structure → option
+    fragments → quality suffix.
+
+    NOTE: negative_prompt is returned for completeness but the current models
+    (flux-fill-dev / flux-canny-dev) do not accept a negative prompt input, so
+    it is effectively unused downstream.
     """
+    prefix = quality_prefix(wall_color)
     try:
         wall_description = build_wall_description(wall_data)
 
-        # Roof style enforcement
+        # Roof style enforcement. The roof colour comes entirely from the prompt
+        # (Canny only conveys the roof's shape), so be explicit: dark asphalt
+        # shingles that match the existing house roof, never a light/white roof.
         roof_fragments = {
-            "gable": "gable roof sunroom, prominent peaked gable roof with dark shingled panels matching house roof, triangular gable shape rising above side wall, opaque solid shingled roof, NO glass roof",
-            "studio":         "studio single-slope sunroom, single pitch lean-to roof, opaque insulated roof panels",
-            "under_existing": "sunroom built under existing roof structure, opaque ceiling panels",
-            "roof_only":      "freestanding patio roof structure, opaque insulated aluminum roof panels",
+            "gable": "peaked gable roof covered in dark gray-black matte asphalt shingles that exactly match the existing house roof in color and texture, opaque solid shingled roof, matte and non-reflective, NOT a white roof, NOT a light roof, NOT a reflective or glossy roof, NOT a roof reflecting the sky, NOT a metal roof, NOT a glass roof",
+            "studio":         "single-slope roof covered in dark asphalt shingles matching the existing house roof in color and texture, opaque solid shingled roof, NOT a white, light, metal, or glass roof",
+            "under_existing": "roof tucked under the existing house roof, opaque dark shingled ceiling matching the house",
+            "roof_only":      "freestanding patio roof covered in dark asphalt shingles matching the existing house roof, opaque, NOT a white or metal roof",
         }
-        roof_fragment = roof_fragments.get(roof_style, "opaque insulated aluminum roof panels")
+        roof_fragment = roof_fragments.get(roof_style, "dark asphalt shingled roof matching the existing house roof, opaque, not white")
 
         # Transom enforcement — if wall_data mentions transom, force it
         has_transom  = "transom"  in wall_data.lower() if wall_data else False
@@ -307,13 +322,13 @@ def build_prompt(
             middle_parts.append(", ".join(fragments))
 
         if middle_parts:
-            positive = QUALITY_PREFIX + " ".join(middle_parts) + ", " + QUALITY_SUFFIX
+            positive = prefix + " ".join(middle_parts) + ", " + QUALITY_SUFFIX
         else:
-            positive = QUALITY_PREFIX + QUALITY_SUFFIX
+            positive = prefix + QUALITY_SUFFIX
 
         logger.info(f"Built prompt positive: {positive}")
         return positive, NEGATIVE_PROMPT
 
     except Exception as e:
         logger.error(f"Prompt builder error: {str(e)}")
-        return QUALITY_PREFIX + QUALITY_SUFFIX, NEGATIVE_PROMPT
+        return prefix + QUALITY_SUFFIX, NEGATIVE_PROMPT

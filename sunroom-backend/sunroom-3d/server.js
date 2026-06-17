@@ -34,7 +34,7 @@ const express = require("express");
 const puppeteer = require("puppeteer");
 const path = require("path");
 const fs = require("fs");
-const { solveCamera, reprojectionError } = require("./pnp");
+const { solveCameraAutoHeight, reprojectionError } = require("./pnp");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -177,16 +177,25 @@ async function render3D(body) {
   const spec = parseConfig(body);
   const dims = getPnPDims(spec);
 
-  // Solve camera
-  const camParams = solveCamera(pts, dims, photoW, photoH);
+  // Solve camera, auto-fitting the height so the structure seats on the patio
+  // (the configured height usually doesn't match what the markers imply).
+  const camParams = solveCameraAutoHeight(pts, dims, photoW, photoH);
   const reproErr = reprojectionError(camParams);
   console.log(`[render] reprojection error: ${reproErr.toFixed(1)}px`);
   console.log("Camera payload:", JSON.stringify(camParams, null, 2));
 
-  // Warn if error is high — result may look skewed
-  if (reproErr > 15) {
+  // Warn if error is high — result may look skewed. The assumed-K Euclidean PnP
+  // floors around ~16px on hand-clicked markers, so only flag clearly bad solves.
+  if (reproErr > 30) {
     console.warn(
-      `[render] WARNING: high reprojection error (${reproErr.toFixed(1)}px) — config dimensions may not match photo`,
+      `[render] WARNING: high reprojection error (${reproErr.toFixed(1)}px) — config dimensions may not match photo, or markers were mis-clicked`,
+    );
+  }
+  // Cheirality failure means the pose put geometry behind the camera — it won't
+  // rasterize cleanly. Should not happen now that PnP enforces it, but surface it.
+  if (camParams.cheirality === false) {
+    console.warn(
+      `[render] WARNING: cheirality failed — PnP could not place all markers in front of the camera`,
     );
   }
 
@@ -200,6 +209,11 @@ async function render3D(body) {
     shingleRGB: null, // sampled inside browser
     photoW,
     photoH,
+    // Marker spheres are debug-only — off unless the caller opts in, so they
+    // never end up baked into a composite that goes to the AI repaint step.
+    debug: body.debug === true,
+    // Manual vertical nudge (feet) to seat the structure on the ground.
+    dropFt: parseFloat(body.dropFt) || 0,
   };
 
   const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64");
@@ -221,40 +235,27 @@ async function render3D(body) {
       window.__shingleSampler = true;
     });
 
-    let resultDataURL = null;
-    let renderError = null;
-
-    // Wait for scene to call window.__done(dataURL)
-    await page.exposeFunction("__done", (dataURL) => {
-      resultDataURL = dataURL;
-    });
-
     page.on("console", (msg) => console.log("[browser]", msg.text()));
     await page.goto(sceneURL, { waitUntil: "networkidle0", timeout: 30000 });
 
-    // Give Three.js render a moment to complete
+    // The scene sets window.__result = { composite, mask } when both render
+    // passes finish, or window.__error on failure.
     await page
       .waitForFunction(
-        () => window.__done !== undefined || window.__error !== undefined,
+        () => window.__result !== undefined || window.__error !== undefined,
         { timeout: 20000 },
       )
       .catch(() => {});
 
-    // Trigger the render if __done wasn't auto-called
-    if (!resultDataURL) {
-      resultDataURL = await page.evaluate(() => {
-        const c = document.getElementById("c");
-        return c ? c.toDataURL("image/jpeg", 0.95) : null;
-      });
-    }
-
-    renderError = await page.evaluate(() => window.__error);
+    const renderError = await page.evaluate(() => window.__error);
     if (renderError) throw new Error(`Scene error: ${renderError}`);
-    if (!resultDataURL) throw new Error("No data URL from scene");
 
-    // Strip the data URL prefix and return raw JPEG bytes
-    const base64Data = resultDataURL.replace(/^data:image\/jpeg;base64,/, "");
-    return Buffer.from(base64Data, "base64");
+    const result = await page.evaluate(() => window.__result);
+    if (!result || !result.composite) throw new Error("No result from scene");
+
+    // Strip data-URL prefixes → raw base64 strings.
+    const strip = (d) => (d ? d.replace(/^data:image\/\w+;base64,/, "") : null);
+    return { composite: strip(result.composite), mask: strip(result.mask) };
   } finally {
     await page.close();
   }
@@ -276,13 +277,14 @@ app.post("/render", async (req, res) => {
     if (!photoW || !photoH)
       return res.status(400).json({ error: "Need photoW and photoH" });
 
-    const jpegBytes = await render3D(req.body);
+    const { composite, mask } = await render3D(req.body);
 
     console.log(
-      `[render] completed in ${Date.now() - start}ms, ${jpegBytes.length} bytes`,
+      `[render] completed in ${Date.now() - start}ms ` +
+        `(composite ${composite.length}b, mask ${mask ? mask.length + "b" : "none"})`,
     );
-    res.set("Content-Type", "image/jpeg");
-    res.send(jpegBytes);
+    // JSON: both the composite and the exact structure mask, base64-encoded.
+    res.json({ composite, mask });
   } catch (err) {
     console.error("[render] error:", err.message);
     res.status(500).json({ error: err.message });

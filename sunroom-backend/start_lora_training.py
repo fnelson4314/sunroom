@@ -1,15 +1,21 @@
 """
-SUNRM LoRA Training Script v2
-Fetches the current trainer version automatically, then starts training.
+SUNRM LoRA Training Script
+Fetches the current ostris/flux-dev-lora-trainer version, uploads the dataset
+zip, starts training, and polls for the resulting weights URL.
+
+Dataset: lora_training_package.zip — 17 watermark-free sunroom photos, each with
+a matching .txt caption that starts with the trigger word SUNRM. Because we ship
+our own captions, autocaption is OFF and the .txt files are used verbatim.
 
 Usage:
-  python start_lora_training_v2.py
+  python start_lora_training.py
 
 Requirements:
   pip install httpx
-  Set REPLICATE_API_TOKEN environment variable
-  Have lora_training_package.zip in the same folder
-  Create destination model at replicate.com first (see instructions below)
+  set REPLICATE_API_TOKEN=r8_...    (your Replicate token)
+  lora_training_package.zip in this folder
+  Create the destination model (see DESTINATION_MODEL below) at
+  replicate.com/create first — as a PRIVATE model.
 """
 
 import httpx
@@ -29,23 +35,20 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-# ── CONFIG — UPDATE YOUR USERNAME HERE ──────────────────────────────────────
-# Replace "your-username" with your Replicate username
-# Find it at: replicate.com/account
-# Then go to replicate.com/create and make a new private model
-# called "sunroom-lora-gable-4inch" before running this script
+# ── CONFIG ──────────────────────────────────────────────────────────────────
+# Create this destination model at replicate.com/create (PRIVATE) before running.
 REPLICATE_USERNAME  = "fnelson4314"
 DESTINATION_MODEL   = f"{REPLICATE_USERNAME}/sunroom-3season_gable"
 TRAINING_ZIP_PATH   = "lora_training_package.zip"
 
 TRAINING_CONFIG = {
-    "trigger_word":         "SUNRM",
-    "steps":                1500,
+    "trigger_word":         "SUNRM",   # already present in every .txt caption
+    "steps":                1500,      # ~88/image for 17 images — safe vs overfit
     "lora_rank":            16,
     "learning_rate":        0.0004,
     "batch_size":           1,
     "resolution":           "512,768,1024",
-    "autocaption":          False,
+    "autocaption":          False,     # use OUR .txt captions verbatim, not auto
     "caption_dropout_rate": 0.05,
 }
 # ────────────────────────────────────────────────────────────────────────────
@@ -164,7 +167,7 @@ if __name__ == "__main__":
     print()
     print("BEFORE CONTINUING:")
     print(f"  1. Go to replicate.com/create")
-    print(f"  2. Create a new PRIVATE model called: sunroom-lora-gable-4inch")
+    print(f"  2. Create a new PRIVATE model named exactly: {DESTINATION_MODEL}")
     print(f"  3. Come back and press Enter")
     print()
 

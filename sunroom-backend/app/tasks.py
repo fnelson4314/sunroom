@@ -1,7 +1,14 @@
 from app.worker import celery_app
 from app.database import supabase
 from app.prompt_builder import build_prompt
-from app.replicate_service import prepare_and_mask, run_flux_fill_lora
+from app.replicate_service import (
+    prepare_and_mask,
+    run_flux_fill_lora,
+    run_flux_control_dev,
+    build_silhouette_mask,
+    prepare_render_mask,
+    composite_masked,
+)
 from app.config import validate_uuid
 import httpx
 import uuid
@@ -16,6 +23,27 @@ logger = logging.getLogger(__name__)
 
 # URL of the Node.js 3D renderer service (set as env var on Railway)
 RENDERER_3D_URL = os.environ.get("RENDERER_3D_URL", "http://localhost:3001")
+
+# How the AI treats the 3D composite. The composite is the source of truth — its
+# config/placement are already correct — so the AI should ONLY restyle the grey
+# sunroom into photoreal glass/aluminum and change nothing else.
+#   "full"       → TRUE inpaint (flux-fill-dev) of the sunroom silhouette only;
+#                  pixels outside the mask are preserved exactly (your real
+#                  photo). Low strength hugs the composite so the config stays
+#                  correct. RECOMMENDED.
+#   "controlnet" → flux-canny-dev: regenerates the WHOLE frame from edges. Does
+#                  NOT preserve the photo and reinvents the config — kept only
+#                  for experimentation, not default.
+#   "ground"     → legacy: blend the ground-contact shadow only.
+FLUX_REPAINT_MODE = os.environ.get("FLUX_REPAINT_MODE", "full")
+# Inpaint denoise strength. The exact mask confines changes to the sunroom, so
+# this can run fairly high safely. Too low (~0.4) leaves a faint ghost; ~0.7 is
+# a good start for a solid photoreal sunroom. Lower it if the config drifts,
+# raise it toward 0.85 if it still looks washed-out. LoRA off (FLUX_FILL_USE_LORA).
+FLUX_REPAINT_STRENGTH = float(os.environ.get("FLUX_REPAINT_STRENGTH", "0.85"))
+# Manual vertical nudge (feet) to seat the structure on the ground when the
+# traced markers sit slightly above the real patio. Positive drops it down.
+STRUCTURE_DROP_FT = float(os.environ.get("STRUCTURE_DROP_FT", "0"))
 
 
 def _photo_dimensions(photo_bytes: bytes) -> tuple[int, int]:
@@ -76,6 +104,7 @@ def generate_sunroom(
             wall_data=wall_data,
             roof_style=roof_style,
             wall_system=wall_system,
+            wall_color=wall_color,
         )
 
         if is_cancelled():
@@ -112,6 +141,7 @@ def generate_sunroom(
 
         # ── Step 5: 3D render via Node.js service ─────────────────────────────
         use_3d_composite = pts is not None
+        render_mask_bytes = None  # exact structure mask from the renderer, if any
 
         if use_3d_composite:
             logger.info(f"[{session_id}] Calling 3D renderer service at {RENDERER_3D_URL}")
@@ -128,6 +158,7 @@ def generate_sunroom(
                     "roofStyle":         roof_style,
                     "mountHeight":       mount_height,
                     "projectionDistance": projection_distance,
+                    "dropFt":            STRUCTURE_DROP_FT,
                 }
 
                 with httpx.Client(timeout=90) as client:
@@ -137,13 +168,29 @@ def generate_sunroom(
                         headers={"Content-Type": "application/json"},
                     )
                     resp.raise_for_status()
-                    composite_bytes = resp.content
+                    render_data = resp.json()
 
-                logger.info(f"[{session_id}] 3D render succeeded ({len(composite_bytes)} bytes)")
+                # Renderer now returns the composite AND an exact structure mask
+                # (white sunroom on black) — pixel-perfect, immune to the
+                # tone-mapping that made diff-based masks flag the whole frame.
+                composite_bytes = base64.b64decode(render_data["composite"])
+                _render_mask_b64 = render_data.get("mask")
+                render_mask_bytes = (
+                    base64.b64decode(_render_mask_b64) if _render_mask_b64 else None
+                )
 
-                # Upload debug composite
+                logger.info(
+                    f"[{session_id}] 3D render succeeded "
+                    f"(composite {len(composite_bytes)}b, "
+                    f"mask {'yes' if render_mask_bytes else 'none'})"
+                )
+
+                # Upload debug composite + mask
                 debug_url = upload_bytes(composite_bytes, "jpg", "debug-composites")
                 logger.info(f"[{session_id}] DEBUG 3D composite: {debug_url}")
+                if render_mask_bytes:
+                    dbg_mask = upload_bytes(render_mask_bytes, "png", "debug-composites")
+                    logger.info(f"[{session_id}] DEBUG structure mask: {dbg_mask}")
 
                 use_composite = True
 
@@ -194,53 +241,120 @@ def generate_sunroom(
         if is_cancelled():
             return {"status": "cancelled"}
 
-        # ── Step 6: Build edge mask for FLUX ─────────────────────────────────
-        # FLUX only blends the ground contact shadow at low strength
-        # We generate a mask that covers ONLY the bottom edge of the structure
-        # (not the full footprint) so FLUX doesn't touch the roof.
+        # ── Step 6: Build the FLUX mask ──────────────────────────────────────
+        # "controlnet"/"full": mask the ENTIRE rendered sunroom silhouette so the
+        #   model repaints the whole structure photoreal (controlnet also locks
+        #   geometry via the composite's edges).
+        # "ground": legacy — mask only the ground-contact strip so FLUX just
+        #   blends the shadow and leaves the raw 3D render visible.
+        repaint_strength = 1.0
+        silhouette_mask_bytes = None  # kept for the post-repaint composite step
         if use_composite:
-            logger.info(f"[{session_id}] Generating edge-only mask for FLUX ground blending")
             inpaint_image_url = upload_bytes(composite_bytes, "jpg", "house-photos")
 
-            if pts:
-                # Build a tight mask covering only the ground contact zone:
-                # bottom ~15% of the structure bounding box
-                edge_mask_bytes = _build_ground_contact_mask(
-                    pts, photo_w, photo_h,
-                    ground_fraction=0.15,
-                    feather_px=28,
-                )
-                mask_url = upload_bytes(edge_mask_bytes, "png", "masks")
-            else:
-                # Fallback: use box mask
-                _, mask_url = prepare_and_mask(
-                    house_photo_url, box_x1, box_y1, box_x2, box_y2
-                )
+            if FLUX_REPAINT_MODE in ("full", "controlnet"):
+                # Prefer the renderer's EXACT structure mask. Only fall back to
+                # the diff-based silhouette if the renderer didn't supply one.
+                if render_mask_bytes:
+                    mask_bytes, coverage = prepare_render_mask(render_mask_bytes)
+                    logger.info(f"[{session_id}] Using exact renderer mask, coverage {coverage:.1%}")
+                else:
+                    mask_bytes, coverage = build_silhouette_mask(composite_bytes, photo_bytes)
+                    logger.info(f"[{session_id}] Diff silhouette mask, coverage {coverage:.1%}")
+
+                if coverage < 0.01 or coverage > 0.85:
+                    # Implausible mask (near-empty, or ballooned to ~whole frame)
+                    # — fall back to the structure bounding box rather than wreck
+                    # the photo.
+                    logger.warning(
+                        f"[{session_id}] Mask coverage {coverage:.1%} implausible — "
+                        f"falling back to bounding-box mask"
+                    )
+                    _, mask_url = prepare_and_mask(
+                        house_photo_url, box_x1, box_y1, box_x2, box_y2
+                    )
+                    # we don't have bytes for the bbox mask here; Step 8 downloads it
+                else:
+                    mask_url = upload_bytes(mask_bytes, "png", "masks")
+                    silhouette_mask_bytes = mask_bytes
+
+                repaint_strength = FLUX_REPAINT_STRENGTH
+                logger.info(f"[{session_id}] DEBUG repaint mask: {mask_url}")
+
+            else:  # "ground" — legacy shadow-only blend
+                logger.info(f"[{session_id}] Generating ground-contact mask (legacy blend)")
+                if pts:
+                    mask_bytes = _build_ground_contact_mask(
+                        pts, photo_w, photo_h, ground_fraction=0.15, feather_px=28
+                    )
+                    mask_url = upload_bytes(mask_bytes, "png", "masks")
+                else:
+                    _, mask_url = prepare_and_mask(
+                        house_photo_url, box_x1, box_y1, box_x2, box_y2
+                    )
+                repaint_strength = 1.0
         else:
+            # No composite — inpaint the box region of the raw photo from scratch.
             inpaint_image_url = resized_image_url
             _, mask_url = prepare_and_mask(
                 house_photo_url, box_x1, box_y1, box_x2, box_y2
             )
+            repaint_strength = 1.0
 
         if is_cancelled():
             return {"status": "cancelled"}
 
-        # ── Step 7: FLUX Fill — edge blending only ────────────────────────────
-        # Low strength: FLUX only softens the ground contact line,
-        # it does NOT touch the roof (mask excludes it).
-        logger.info(f"[{session_id}] Running FLUX Fill for ground contact blending")
-        render_url = run_flux_fill_lora(
-            image_url=inpaint_image_url,
-            mask_url=mask_url,
-            prompt=positive_prompt,
-            negative_prompt=negative_prompt,
-            wall_system=wall_system,
-            roof_style=roof_style,
-        )
+        # ── Step 7: AI repaint ────────────────────────────────────────────────
+        if use_composite and FLUX_REPAINT_MODE == "controlnet":
+            # Structure-locked photoreal pass via a first-party BFL control model.
+            # Canny edges of the composite pin the geometry/angle/config; there's
+            # no mask, so the whole frame is regenerated and Step 8 restores the
+            # real background. Clean weights → no watermark text.
+            logger.info(f"[{session_id}] Running first-party control model (canny/depth)")
+            render_url = run_flux_control_dev(
+                control_image_url=inpaint_image_url,
+                prompt=positive_prompt,
+                wall_system=wall_system,
+                roof_style=roof_style,
+            )
+        else:
+            logger.info(
+                f"[{session_id}] Running FLUX Fill (mode={FLUX_REPAINT_MODE}, "
+                f"strength={repaint_strength})"
+            )
+            render_url = run_flux_fill_lora(
+                image_url=inpaint_image_url,
+                mask_url=mask_url,
+                prompt=positive_prompt,
+                negative_prompt=negative_prompt,
+                wall_system=wall_system,
+                roof_style=roof_style,
+                strength=repaint_strength,
+            )
 
         if is_cancelled():
             logger.info(f"[{session_id}] Cancelled after Replicate returned — discarding")
             return {"status": "cancelled"}
+
+        # ── Step 8: Restore everything outside the sunroom ────────────────────
+        # The ControlNet model renoises the whole frame, so composite its output
+        # back over the ORIGINAL photo through the mask: only the sunroom region
+        # changes; house, pool and sky stay pixel-identical and any stray text
+        # artifacts outside the structure are discarded.
+        if use_composite and FLUX_REPAINT_MODE in ("full", "controlnet"):
+            try:
+                cm_bytes = silhouette_mask_bytes
+                if cm_bytes is None:
+                    with httpx.Client(timeout=30) as client:
+                        cm_bytes = client.get(mask_url).content
+                composited_bytes = composite_masked(render_url, photo_bytes, cm_bytes)
+                render_url = upload_bytes(composited_bytes, "jpg", "renders")
+                logger.info(f"[{session_id}] Masked composite applied: {render_url}")
+            except Exception as comp_err:
+                logger.warning(
+                    f"[{session_id}] Masked composite failed ({comp_err}) — "
+                    f"using raw AI output"
+                )
 
         supabase.table("configurations")\
             .update({"status": "complete", "render_url": render_url})\
