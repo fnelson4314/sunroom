@@ -162,15 +162,19 @@ function projectPoint(eye, Rc, fovYdeg, aspect, W, H, Xw) {
 // ─── Levenberg-Marquardt pose solver ──────────────────────────────────────────
 
 // params: [ex,ey,ez, rx,ry,rz] (+ optional fovY as params[6] when optimizeFov)
-function residuals(params, fovYfixed, worldPts, imagePts, aspect, W, H) {
+// weights: optional per-point importance. We weight the GROUND markers far more
+// than the top ones — see solveCamera for why. Weighted least squares minimises
+// Σ wᵢ·errᵢ², so each residual is scaled by √wᵢ.
+function residuals(params, fovYfixed, worldPts, imagePts, aspect, W, H, weights) {
   const eye = [params[0], params[1], params[2]];
   const Rc = rodrigues([params[3], params[4], params[5]]);
   const fovY = params.length > 6 ? params[6] : fovYfixed;
   const res = [];
   for (let i = 0; i < worldPts.length; i++) {
     const [u, v] = projectPoint(eye, Rc, fovY, aspect, W, H, worldPts[i]);
-    res.push(u - imagePts[i][0]);
-    res.push(v - imagePts[i][1]);
+    const ws = weights ? Math.sqrt(weights[i]) : 1;
+    res.push((u - imagePts[i][0]) * ws);
+    res.push((v - imagePts[i][1]) * ws);
   }
   return res;
 }
@@ -181,11 +185,11 @@ function sumSq(r) {
   return s;
 }
 
-function lmSolve(initParams, fovYfixed, worldPts, imagePts, aspect, W, H, iters) {
+function lmSolve(initParams, fovYfixed, worldPts, imagePts, aspect, W, H, iters, weights) {
   const n = initParams.length;
   let p = initParams.slice();
   let lambda = 1e-2;
-  let r = residuals(p, fovYfixed, worldPts, imagePts, aspect, W, H);
+  let r = residuals(p, fovYfixed, worldPts, imagePts, aspect, W, H, weights);
   let err = sumSq(r);
   const eps = 1e-5;
 
@@ -197,8 +201,8 @@ function lmSolve(initParams, fovYfixed, worldPts, imagePts, aspect, W, H, iters)
       pp[j] += eps;
       const pm = p.slice();
       pm[j] -= eps;
-      const rp = residuals(pp, fovYfixed, worldPts, imagePts, aspect, W, H);
-      const rm = residuals(pm, fovYfixed, worldPts, imagePts, aspect, W, H);
+      const rp = residuals(pp, fovYfixed, worldPts, imagePts, aspect, W, H, weights);
+      const rm = residuals(pm, fovYfixed, worldPts, imagePts, aspect, W, H, weights);
       cols.push(rp.map((v, k) => (v - rm[k]) / (2 * eps)));
     }
     const m = r.length;
@@ -223,7 +227,7 @@ function lmSolve(initParams, fovYfixed, worldPts, imagePts, aspect, W, H, iters)
       );
       const delta = luSolve(A, Jtr.map((v) => -v));
       const pn = p.map((v, i) => v + delta[i]);
-      const rn = residuals(pn, fovYfixed, worldPts, imagePts, aspect, W, H);
+      const rn = residuals(pn, fovYfixed, worldPts, imagePts, aspect, W, H, weights);
       const en = sumSq(rn);
       if (en < err) {
         p = pn;
@@ -242,15 +246,29 @@ function lmSolve(initParams, fovYfixed, worldPts, imagePts, aspect, W, H, iters)
   const eye = [p[0], p[1], p[2]];
   const Rc = rodrigues([p[3], p[4], p[5]]);
   const fovY = p.length > 6 ? p[6] : fovYfixed;
-  // mean per-point Euclidean reprojection error (px)
+  // TRUE (unweighted) per-point Euclidean reprojection error (px). Reported
+  // separately from the weighted objective the LM actually minimised, so logs
+  // stay in real pixels. groundErr is the seating error of the 3 ground markers
+  // (worldPts 2,3,4) — the number that decides whether the base floats.
   let total = 0,
+    groundTotal = 0,
     front = true;
   for (let i = 0; i < worldPts.length; i++) {
     const [u, v, f] = projectPoint(eye, Rc, fovY, aspect, W, H, worldPts[i]);
-    total += Math.hypot(u - imagePts[i][0], v - imagePts[i][1]);
+    const e = Math.hypot(u - imagePts[i][0], v - imagePts[i][1]);
+    total += e;
+    if (i >= 2) groundTotal += e;
     if (f <= 0) front = false;
   }
-  return { params: p, eye, Rc, fovY, meanErr: total / worldPts.length, front };
+  return {
+    params: p,
+    eye,
+    Rc,
+    fovY,
+    meanErr: total / worldPts.length,
+    groundErr: groundTotal / 3,
+    front,
+  };
 }
 
 // ─── public API ───────────────────────────────────────────────────────────────
@@ -268,6 +286,17 @@ function solveCamera(pts, dims, photoW, photoH) {
   const imagePts = pts.map(([nx, ny]) => [nx * photoW, ny * photoH]);
   const aspect = photoW / photoH;
   const center = [wallW_C / 2, wallH / 2, wallW_B / 2];
+
+  // GROUND-SEATING PRIORITY. The 5 clicked markers rarely form a perfect box
+  // (the two top markers sit on the house plane, the model treats one as the
+  // front plane — a forgiving perspective mismatch). That leaves an irreducible
+  // fit residual. With equal weights the optimiser dumps it on the rigid ground
+  // points (worldPts 2,3,4), lifting the base off the patio — the "floating
+  // sunroom". Weighting the ground markers heavily forces the camera to seat the
+  // base on the clicked ground points; any leftover error lands on the TOP,
+  // where the roof overhang/gable hides it. When the clicks DO form a clean box
+  // the ground error is ~0 either way, so this never hurts a good solve.
+  const weights = [1, 1, 8, 8, 8];
 
   // Seed camera positions: out in front (+Z), a spread of sideways offsets and
   // standing-ish heights. The real photographer is somewhere in this volume.
@@ -288,8 +317,8 @@ function solveCamera(pts, dims, photoW, photoH) {
     for (const eye of eyes) {
       const Rc = lookAtRc(eye, center);
       const init = [...eye, ...rmatToRodrigues(Rc)];
-      const sol = lmSolve(init, fovY, worldPts, imagePts, aspect, photoW, photoH, 60);
-      if (!best || better(sol, best)) best = sol;
+      const sol = lmSolve(init, fovY, worldPts, imagePts, aspect, photoW, photoH, 60, weights);
+      if (!best || betterGround(sol, best)) best = sol;
     }
   }
 
@@ -303,8 +332,9 @@ function solveCamera(pts, dims, photoW, photoH) {
     photoW,
     photoH,
     120,
+    weights,
   );
-  if (better(polished, best)) best = polished;
+  if (betterGround(polished, best)) best = polished;
 
   // Convert pose → Three.js camera params (position / target / up / fovY).
   const eye = best.eye,
@@ -315,6 +345,7 @@ function solveCamera(pts, dims, photoW, photoH) {
 
   console.log(
     `[pnp] solved: fovY=${best.fovY.toFixed(1)}° err=${best.meanErr.toFixed(1)}px ` +
+      `groundErr=${best.groundErr.toFixed(1)}px ` +
       `cheirality=${best.front ? "ok" : "FAIL"} ` +
       `pos=(${eye.map((v) => v.toFixed(2)).join(",")})`,
   );
@@ -332,8 +363,18 @@ function solveCamera(pts, dims, photoW, photoH) {
     photoW,
     photoH,
     meanReprojErr: best.meanErr,
+    groundReprojErr: best.groundErr,
     cheirality: best.front,
   };
+}
+
+// Prefer cheirality-valid solutions; among equal validity, the camera that seats
+// the base best (lower ground error) wins — that's what stops the float. Falls
+// back to overall mean error only when ground errors tie.
+function betterGround(a, b) {
+  if (a.front !== b.front) return a.front;
+  if (Math.abs(a.groundErr - b.groundErr) > 0.5) return a.groundErr < b.groundErr;
+  return a.meanErr < b.meanErr;
 }
 
 // Prefer cheirality-valid solutions; among equal validity, lower error wins.
@@ -361,6 +402,9 @@ function solveCameraAutoHeight(pts, dims, photoW, photoH) {
   for (const f of factors) {
     const h = baseH * f;
     const cam = solveCamera(pts, Object.assign({}, dims, { wallH: h }), photoW, photoH);
+    // Select on overall mean error (the ground markers are already weighted
+    // heavily inside solveCamera, so the chosen camera seats the base; selecting
+    // on ground error alone picks too-short heights that blow out the top).
     if (!best || cam.meanReprojErr < best.meanReprojErr) {
       best = cam;
       best.solvedHeight = h;
@@ -368,7 +412,8 @@ function solveCameraAutoHeight(pts, dims, photoW, photoH) {
   }
   console.log(
     `[pnp] auto-height: ${best.solvedHeight.toFixed(2)}ft ` +
-      `(config ${baseH.toFixed(2)}ft) reproj=${best.meanReprojErr.toFixed(1)}px`,
+      `(config ${baseH.toFixed(2)}ft) reproj=${best.meanReprojErr.toFixed(1)}px ` +
+      `groundErr=${best.groundReprojErr.toFixed(1)}px`,
   );
   return best;
 }

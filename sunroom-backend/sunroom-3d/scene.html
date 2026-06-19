@@ -668,7 +668,61 @@
 
         // ── Pass 1: the photoreal-ish composite (sunroom over the photo) ──
         renderer.render(scene, cam);
-        const compositeURL = canvas.toDataURL("image/jpeg", 0.95);
+        let compositeURL = canvas.toDataURL("image/jpeg", 0.95);
+
+        // ── Debug overlay: draw the user's CLICKED markers as dots on the
+        // composite. Decisive test for "is it floating?": if the structure's
+        // base sits on these dots it's seated (any gap is a visual/shadow
+        // issue); if the structure floats ABOVE the dots the geometry isn't
+        // rendering at world y=0. Toggle with RENDER_DEBUG=1 on the renderer.
+        if (payload.debug && camera.imagePts) {
+          const dbg = document.createElement("canvas");
+          dbg.width = photoW;
+          dbg.height = photoH;
+          const dctx = dbg.getContext("2d");
+          await new Promise((res) => {
+            const im = new Image();
+            im.onload = () => {
+              dctx.drawImage(im, 0, 0, photoW, photoH);
+              const tags = ["0 topL", "1 topR", "2 botR", "3 botL", "4 front"];
+              camera.imagePts.forEach(([u, v], i) => {
+                const ground = i >= 2; // ground markers in red, tops in cyan
+                dctx.fillStyle = ground ? "#ff2020" : "#00e5ff";
+                dctx.strokeStyle = "#000";
+                dctx.lineWidth = 2;
+                dctx.beginPath();
+                dctx.arc(u, v, 9, 0, 2 * Math.PI);
+                dctx.fill();
+                dctx.stroke();
+                dctx.font = "bold 18px sans-serif";
+                dctx.fillStyle = "#000";
+                dctx.fillText(tags[i], u + 12, v + 6);
+                dctx.fillStyle = "#fff";
+                dctx.fillText(tags[i], u + 11, v + 5);
+              });
+              // GREEN dots: where THREE.js's OWN camera projects the geometry
+              // corners (the 5 worldPts). This is the actual render's projection,
+              // not PnP's. If green sits on the cyan/red dots, the camera is
+              // consistent and the structure is geometrically seated (any gap is
+              // visual). If green sits up on the structure instead, scene.html's
+              // camera differs from the solved one — a reconstruction bug.
+              if (camera.worldPts) {
+                dctx.fillStyle = "#22ff22";
+                dctx.strokeStyle = "#000";
+                camera.worldPts.forEach((wp) => {
+                  const [sx, sy] = worldToScreen(cam, wp[0], wp[1], wp[2], photoW, photoH);
+                  dctx.beginPath();
+                  dctx.arc(sx, sy, 5, 0, 2 * Math.PI);
+                  dctx.fill();
+                  dctx.stroke();
+                });
+              }
+              res();
+            };
+            im.src = compositeURL;
+          });
+          compositeURL = dbg.toDataURL("image/jpeg", 0.95);
+        }
 
         // ── Pass 2: an EXACT structure mask ──
         // Render the sunroom as flat white on a black background with no photo.

@@ -192,6 +192,13 @@ export default function CameraScreen() {
   const [photoSize, setPhotoSize] = useState<{ w: number; h: number } | null>(
     null,
   );
+  // Actual measured size of the tap overlay. Tap coords (locationX/Y) are
+  // relative to THIS element, so we must normalize against its real size — not
+  // window.innerWidth/Height, which can differ (DevTools open, browser chrome,
+  // resize) and silently push normalized points past 0–1, floating the build.
+  const [overlaySize, setOverlaySize] = useState<{ w: number; h: number } | null>(
+    null,
+  );
   const cameraRef = useRef<CameraView>(null);
 
   useEffect(() => {
@@ -268,10 +275,13 @@ export default function CameraScreen() {
   const confirmPoints = async () => {
     if (!allPlaced || !photoUri) return;
 
-    // Get live window dimensions — static Dimensions.get() is stale on web
-    // when the browser window has been resized since page load
-    const screenW = window.innerWidth;
-    const screenH = window.innerHeight;
+    // Normalize against the tap overlay's MEASURED size (onLayout), because the
+    // tap coords are relative to that element. window.innerWidth/Height can
+    // differ from it (DevTools open, browser chrome, resize) — using them was
+    // producing normalized y > 1.0 (points below the photo), which floated the
+    // whole structure. Fall back to window dims only if the layout hasn't fired.
+    const screenW = overlaySize?.w ?? window.innerWidth;
+    const screenH = overlaySize?.h ?? window.innerHeight;
 
     const wallCorners = buildWallCorners(points, wallCount, wallCombo);
 
@@ -280,31 +290,36 @@ export default function CameraScreen() {
       : screenW / screenH;
     const screenAspect = screenW / screenH;
 
+    // The review photo is shown with resizeMode="contain" — the WHOLE photo is
+    // visible (letterboxed), so every part (incl. the patio at the bottom) can
+    // be tapped. Map taps from overlay space into 0–1 photo space accordingly:
+    // the photo fits inside the overlay with bars on one axis (offsetX/offsetY
+    // are the bar thickness), and we SUBTRACT the bar before dividing.
     let displayedW: number,
       displayedH: number,
       offsetX = 0,
       offsetY = 0;
 
     if (photoAspect > screenAspect) {
-      // Photo wider than screen — fits height, crops left/right
-      displayedH = screenH;
-      displayedW = screenH * photoAspect;
-      offsetX = (displayedW - screenW) / 2;
-      offsetY = 0;
-    } else {
-      // Photo taller than screen — fits width, crops top/bottom
+      // Photo relatively wider — fits width, letterbox top/bottom
       displayedW = screenW;
       displayedH = screenW / photoAspect;
       offsetX = 0;
-      offsetY = (displayedH - screenH) / 2;
+      offsetY = (screenH - displayedH) / 2;
+    } else {
+      // Photo relatively taller — fits height, letterbox left/right
+      displayedH = screenH;
+      displayedW = screenH * photoAspect;
+      offsetX = (screenW - displayedW) / 2;
+      offsetY = 0;
     }
 
     // Normalize all points to 0-1 photo space
     const normalizedCorners: Record<string, number[][]> = {};
     for (const [wallId, corners] of Object.entries(wallCorners)) {
       normalizedCorners[wallId] = (corners as number[][]).map(([x, y]) => [
-        (x + offsetX) / displayedW,
-        (y + offsetY) / displayedH,
+        (x - offsetX) / displayedW,
+        (y - offsetY) / displayedH,
       ]);
     }
 
@@ -448,16 +463,27 @@ export default function CameraScreen() {
 
   return (
     <View style={styles.container}>
-      <Image
-        source={{ uri: photoUri! }}
-        style={styles.photo}
-        resizeMode="cover"
-      />
+      {/* Photo + tap overlay live in their OWN area, inset to clear the banner
+          (top) and footer (bottom). Previously both filled the whole screen and
+          the footer covered the bottom of the photo, so the ground couldn't be
+          tapped — points landed high and the structure floated. */}
+      <View style={styles.photoArea}>
+        <Image
+          source={{ uri: photoUri! }}
+          style={styles.photo}
+          resizeMode="contain"
+        />
 
-      <View
-        style={styles.overlay}
-        onStartShouldSetResponder={() => true}
-        onResponderGrant={(evt) => {
+        <View
+          style={styles.overlay}
+          onLayout={(e) =>
+            setOverlaySize({
+              w: e.nativeEvent.layout.width,
+              h: e.nativeEvent.layout.height,
+            })
+          }
+          onStartShouldSetResponder={() => true}
+          onResponderGrant={(evt) => {
           const { locationX, locationY } = evt.nativeEvent;
           const nearIndex = points.findIndex((p) => {
             const dx = p.x - locationX,
@@ -493,6 +519,7 @@ export default function CameraScreen() {
             <Text style={styles.pointDotLabel}>{i + 1}</Text>
           </View>
         ))}
+        </View>
       </View>
 
       <View style={styles.instructionBanner}>
@@ -559,6 +586,11 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   camera: { flex: 1 },
+  // Clickable photo region, inset to clear the instruction banner (top) and the
+  // footer/Confirm bar (bottom) so the WHOLE photo — including the ground at the
+  // bottom — is tappable. The photo + overlay fill this box; normalization keys
+  // off the overlay's measured size, so the inset never distorts the mapping.
+  photoArea: { position: "absolute", top: 92, left: 0, right: 0, bottom: 132 },
   photo: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   overlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   permissionText: {

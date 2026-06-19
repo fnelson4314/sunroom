@@ -153,17 +153,31 @@ function getPnPDims(spec) {
 
 let browser = null;
 
+// Puppeteer changed the connection check: <=v21 used browser.isConnected()
+// (a method), v22+ uses browser.connected (a getter). Support both.
+function browserConnected(b) {
+  if (!b) return false;
+  if (typeof b.isConnected === "function") return b.isConnected();
+  if (typeof b.connected === "boolean") return b.connected;
+  return true; // can't tell — assume it's alive
+}
+
 async function getBrowser() {
-  if (!browser || !browser.isConnected()) {
+  if (!browserConnected(browser)) {
     browser = await puppeteer.launch({
       headless: "new",
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
-        "--disable-gpu", // software render on Railway
+        // Software WebGL (no GPU) — works headless on any machine/Railway.
+        // Newer Chrome deprecated --use-gl=swiftshader and now gates software
+        // WebGL behind --enable-unsafe-swiftshader, routed through ANGLE.
         "--enable-webgl",
-        "--use-gl=swiftshader", // software WebGL
+        "--use-gl=angle",
+        "--use-angle=swiftshader",
+        "--enable-unsafe-swiftshader",
+        "--ignore-gpu-blocklist",
       ],
     });
   }
@@ -209,12 +223,21 @@ async function render3D(body) {
     shingleRGB: null, // sampled inside browser
     photoW,
     photoH,
-    // Marker spheres are debug-only — off unless the caller opts in, so they
-    // never end up baked into a composite that goes to the AI repaint step.
-    debug: body.debug === true,
+    // Debug overlay (clicked-marker dots + spheres) — off unless the caller
+    // opts in OR RENDER_DEBUG=1 is set on the renderer, so it never ends up
+    // baked into a composite that goes to the AI repaint step.
+    debug: body.debug === true || process.env.RENDER_DEBUG === "1",
     // Manual vertical nudge (feet) to seat the structure on the ground.
     dropFt: parseFloat(body.dropFt) || 0,
   };
+
+  // A nonzero dropFt is the ONLY thing that shifts the structure vertically in
+  // world space — a negative value lifts it off the ground (floats). Surface it
+  // so a stray .env value can't silently float the whole structure.
+  console.log(
+    `[render] dropFt=${payload.dropFt} (negative lifts the structure UP), ` +
+      `solvedHeight=${camParams.solvedHeight}ft`,
+  );
 
   const payloadB64 = Buffer.from(JSON.stringify(payload)).toString("base64");
   const sceneFile = path.resolve(__dirname, "scene.html");
