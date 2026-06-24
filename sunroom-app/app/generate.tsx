@@ -467,8 +467,8 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   statusHint: {
-    fontSize: 14,
-    color: "rgba(255,255,255,0.6)",
+    fontSize: 15,
+    color: "rgba(255,255,255,0.7)",
     textAlign: "center",
     marginTop: -8,
   },
@@ -521,18 +521,19 @@ const styles = StyleSheet.create({
   },
   progressDotCheck: {
     color: Colors.white,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "700",
   },
   progressLabel: {
-    fontSize: 9,
-    color: "rgba(255,255,255,0.4)",
-    marginTop: 4,
+    fontSize: 11,
+    color: "rgba(255,255,255,0.55)",
+    marginTop: 5,
     textAlign: "center",
-    width: 52,
+    width: 58,
   },
   progressLabelActive: {
-    color: "rgba(255,255,255,0.9)",
+    color: "rgba(255,255,255,0.95)",
+    fontWeight: "600",
   },
   progressLine: {
     flex: 1,
@@ -544,7 +545,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.status.complete,
   },
   primaryButton: {
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.accent,
     paddingHorizontal: 32,
     paddingVertical: 16,
     borderRadius: 14,
@@ -553,7 +554,7 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: {
     color: Colors.white,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: "700",
   },
   buttonRow: {
@@ -579,8 +580,8 @@ const styles = StyleSheet.create({
     top: 56,
     left: 20,
     backgroundColor: "rgba(255,255,255,0.15)",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
     borderRadius: 20,
     borderWidth: 0.5,
     borderColor: "rgba(255,255,255,0.3)",
@@ -588,7 +589,7 @@ const styles = StyleSheet.create({
   },
   cancelButtonText: {
     color: Colors.white,
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: "600",
   },
 });

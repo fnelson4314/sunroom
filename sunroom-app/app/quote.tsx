@@ -611,7 +611,7 @@ const styles = StyleSheet.create({
     color: "#1C1C1E",
     letterSpacing: -0.4,
   },
-  tagline: { fontSize: 9, color: "#A8A49C", letterSpacing: 1.8, marginTop: 3 },
+  tagline: { fontSize: 11, color: "#A8A49C", letterSpacing: 1.8, marginTop: 3 },
   metaRight: { alignItems: "flex-end", gap: 2 },
   quoteNumber: {
     fontSize: 15,
@@ -624,7 +624,7 @@ const styles = StyleSheet.create({
   twoCol: { flexDirection: "row", gap: 20, marginBottom: 20 },
   halfCol: { flex: 1, gap: 6 },
   sectionLabel: {
-    fontSize: 9,
+    fontSize: 11,
     fontWeight: "700",
     letterSpacing: 1.8,
     color: "#B0ADA6",
@@ -639,7 +639,7 @@ const styles = StyleSheet.create({
   customerEmail: { fontSize: 13, color: "#8A8880" },
   specsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   specItem: { minWidth: "45%", gap: 1 },
-  specLabel: { fontSize: 9, letterSpacing: 1.2, color: "#C0BCB5" },
+  specLabel: { fontSize: 11, letterSpacing: 1.2, color: "#C0BCB5" },
   specValue: { fontSize: 14, fontWeight: "600", color: "#1C1C1E" },
 
   divider: { height: 1, backgroundColor: "#E8E4DC", marginVertical: 20 },
@@ -647,7 +647,7 @@ const styles = StyleSheet.create({
   photoRow: { flexDirection: "row", gap: 10, marginBottom: 4 },
   photoCard: { flex: 1, gap: 5 },
   photoLabel: {
-    fontSize: 8,
+    fontSize: 11,
     fontWeight: "700",
     letterSpacing: 1.5,
     color: "#B0ADA6",
@@ -676,7 +676,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#E8E4DC",
   },
   priceHeaderText: {
-    fontSize: 9,
+    fontSize: 11,
     fontWeight: "700",
     letterSpacing: 1.5,
     color: "#B0ADA6",
@@ -690,7 +690,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#F2F0EB",
   },
   priceRowName: { fontSize: 13, fontWeight: "500", color: "#1C1C1E" },
-  priceRowDetail: { fontSize: 11, color: "#A8A49C", lineHeight: 16 },
+  priceRowDetail: { fontSize: 12, color: "#A8A49C", lineHeight: 16 },
   priceRowValue: { fontSize: 13, fontWeight: "600", color: "#1C1C1E" },
   totalRow: {
     flexDirection: "row",
@@ -729,13 +729,13 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   validityText: {
-    fontSize: 11,
+    fontSize: 12,
     color: "#8A8880",
     fontWeight: "500",
     letterSpacing: 0.3,
   },
   disclaimer: {
-    fontSize: 10,
+    fontSize: 12,
     color: "#C0BCB5",
     textAlign: "center",
     lineHeight: 15,

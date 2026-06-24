@@ -20,6 +20,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -79,28 +80,34 @@ export default function ConfigureScreen() {
   const [activeWallId, setActiveWallId] = useState<"A" | "B" | "C">("B");
 
   // Intercept the header back button on step 1 and confirm before discarding.
+  // NOTE: react-native-web's Alert.alert ignores custom buttons (it only shows a
+  // single OK), so on web the "Discard" callback never fired and Back appeared
+  // broken. Use window.confirm on web and the native Alert on iOS/Android.
+  const confirmDiscardAndBack = () => {
+    const message =
+      "Going back will lose all unsaved configuration. Save a draft first if you want to keep your work.";
+    if (Platform.OS === "web") {
+      // eslint-disable-next-line no-alert
+      if (typeof window !== "undefined" && window.confirm(message)) {
+        router.back();
+      }
+      return;
+    }
+    Alert.alert("Discard session?", message, [
+      { text: "Stay", style: "cancel" },
+      { text: "Discard", style: "destructive", onPress: () => router.back() },
+    ]);
+  };
+
   useLayoutEffect(() => {
     navigation.setOptions({
       headerLeft: () =>
         currentStep === 1 ? (
           <TouchableOpacity
-            onPress={() =>
-              Alert.alert(
-                "Discard session?",
-                "Going back will lose all unsaved configuration. Save a draft first if you want to keep your work.",
-                [
-                  { text: "Stay", style: "cancel" },
-                  {
-                    text: "Discard",
-                    style: "destructive",
-                    onPress: () => router.back(),
-                  },
-                ],
-              )
-            }
-            style={{ paddingHorizontal: 8 }}
+            onPress={confirmDiscardAndBack}
+            style={{ paddingHorizontal: 8, paddingVertical: 6 }}
           >
-            <Text style={{ fontSize: 16, color: Colors.primary }}>‹ Back</Text>
+            <Text style={{ fontSize: 17, color: Colors.primary }}>‹ Back</Text>
           </TouchableOpacity>
         ) : undefined,
     });
@@ -1068,7 +1075,7 @@ export default function ConfigureScreen() {
                       Roof — {configure.state.roofType.name}
                       {"\n"}
                       <Text
-                        style={{ fontSize: 11, color: Colors.text.tertiary }}
+                        style={{ fontSize: 13, color: Colors.text.tertiary }}
                       >
                         {roofDetail}
                       </Text>
@@ -1282,7 +1289,7 @@ const styles = StyleSheet.create({
   },
   optionName: { fontSize: 14, fontWeight: "600", color: Colors.text.primary },
   optionNameSelected: { color: Colors.primary },
-  optionDesc: { fontSize: 11, color: Colors.text.tertiary },
+  optionDesc: { fontSize: 13, color: Colors.text.tertiary },
   wallCountRow: { flexDirection: "row", gap: 10 },
   wallCountCard: {
     flex: 1,
@@ -1448,7 +1455,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   roofDimLabel: {
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: "600",
     color: Colors.text.tertiary,
     textTransform: "uppercase",
@@ -1462,7 +1469,7 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   roofDimConvert: {
-    fontSize: 10,
+    fontSize: 12,
     color: Colors.text.tertiary,
     textAlign: "center",
     fontStyle: "italic",

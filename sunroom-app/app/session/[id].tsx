@@ -321,7 +321,7 @@ const styles = StyleSheet.create({
   },
   noRenderBannerText: {
     color: Colors.white,
-    fontSize: 12,
+    fontSize: 13,
     textAlign: "center",
     fontWeight: "500",
   },
@@ -352,11 +352,11 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   statusText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "600",
   },
   dateText: {
-    fontSize: 12,
+    fontSize: 13,
     color: Colors.text.tertiary,
   },
   card: {
@@ -368,7 +368,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   cardLabel: {
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: "700",
     textTransform: "uppercase",
     letterSpacing: 0.5,
@@ -402,7 +402,7 @@ const styles = StyleSheet.create({
     color: Colors.text.primary,
   },
   dimensionLabel: {
-    fontSize: 10,
+    fontSize: 12,
     color: Colors.text.tertiary,
     textTransform: "uppercase",
     letterSpacing: 0.4,
@@ -433,7 +433,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   sessionId: {
-    fontSize: 10,
+    fontSize: 12,
     color: Colors.text.tertiary,
     textAlign: "center",
     fontFamily: "monospace",
@@ -485,7 +485,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
   },
   secondaryButtonText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "600",
     color: Colors.text.secondary,
   },

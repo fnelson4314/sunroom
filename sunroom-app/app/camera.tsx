@@ -706,7 +706,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4,
     shadowRadius: 3,
   },
-  pointDotLabel: { color: "#fff", fontSize: 11, fontWeight: "700" },
+  pointDotLabel: { color: "#fff", fontSize: 13, fontWeight: "700" },
   instructionBanner: {
     position: "absolute",
     top: 24,
@@ -726,7 +726,7 @@ const styles = StyleSheet.create({
   },
   instructionSub: {
     color: "rgba(255,255,255,0.6)",
-    fontSize: 11,
+    fontSize: 13,
     textAlign: "center",
   },
   reviewFooter: {
