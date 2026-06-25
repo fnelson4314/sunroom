@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Image,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,6 +16,27 @@ import {
 } from "react-native";
 
 type LineItem = { name: string; amount: number; detail: string };
+
+// On web, expo-print falls back to printing the live app page (browser chrome,
+// no background colors, the app's own buttons). Instead open a clean window with
+// ONLY the quote HTML and print that — colors print via print-color-adjust and
+// the base64 images embed reliably. Returns true if it handled the print.
+function printHtmlWeb(html: string): boolean {
+  if (Platform.OS !== "web" || typeof window === "undefined") return false;
+  const win = window.open("", "_blank", "width=900,height=1200");
+  if (!win) return false;
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  const doPrint = () => {
+    win.focus();
+    win.print();
+  };
+  // Give the (base64) images a tick to lay out before printing.
+  if (win.document.readyState === "complete") setTimeout(doPrint, 450);
+  else win.onload = () => setTimeout(doPrint, 450);
+  return true;
+}
 
 // Convert any image URI (local file, blob, or remote URL) to a base64 data URI
 // so it embeds reliably in PDF HTML across native and web.
@@ -73,6 +95,8 @@ export default function QuoteScreen() {
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [beforeErr, setBeforeErr] = useState(false);
+  const [afterErr, setAfterErr] = useState(false);
 
   useEffect(() => {
     const fetchSession = async () => {
@@ -123,6 +147,9 @@ export default function QuoteScreen() {
   })();
 
   const afterUrl = renderUrl || session?.render_url || "";
+  // Fall back to the session's stored house photo when arriving from a saved
+  // session (where the local photoUri param isn't present), so "before" loads.
+  const beforeUrl = photoUri || session?.house_photo_url || "";
 
   // ─── PDF ──────────────────────────────────────────────────
 
@@ -149,7 +176,7 @@ export default function QuoteScreen() {
               <img src="${beforeDataUri}" />
             </div>
             <div class="photo-card">
-              <div class="photo-label">AFTER — AI VISUALIZATION</div>
+              <div class="photo-label after">AFTER — AI VISUALIZATION</div>
               <img src="${afterDataUri}" />
             </div>
           </div>`
@@ -165,75 +192,85 @@ export default function QuoteScreen() {
 <head>
 <meta charset="utf-8"/>
 <style>
-  @media print {
-    @page { margin: 12mm 14mm; size: A4; }
-    .no-print { display: none !important; }
-  }
+  /* @page margin 0 suppresses the browser's URL/date print headers;
+     print-color-adjust forces the brand colors to actually print. Body padding
+     supplies the page margins. NOTE: a full-bleed header background + margin:0
+     trips a Chromium print bug that pushes the body onto a 2nd page, so the
+     header is a rounded card WITHIN the margins instead of bleeding to the edge. */
+  @page { margin: 0; size: A4; }
+  html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    color: #1c1c1e;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
+    color: #1b232e;
     background: #fff;
-    padding: 48px 52px;
-    font-size: 13px;
+    font-size: 12.5px;
     line-height: 1.5;
+    padding: 28px 34px;
   }
   .header {
     display: flex;
     justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 32px;
-    padding-bottom: 24px;
-    border-bottom: 1px solid #e2ded6;
+    align-items: flex-end;
+    background: #0A4A9F;
+    color: #fff;
+    border-radius: 10px;
+    border-bottom: 4px solid #E1251B;
+    padding: 22px 26px;
+    margin-bottom: 20px;
   }
-  .company { font-size: 26px; font-weight: 800; color: #1c1c1e; letter-spacing: -0.5px; }
-  .tagline { font-size: 9px; letter-spacing: 2px; text-transform: uppercase; color: #a8a49c; margin-top: 4px; }
+  .company { font-size: 30px; font-weight: 800; color: #fff; letter-spacing: 1.5px; }
+  .tagline { font-size: 10px; letter-spacing: 2.5px; text-transform: uppercase; color: rgba(255,255,255,0.85); margin-top: 5px; }
   .meta-right { text-align: right; }
-  .quote-num { font-size: 15px; font-weight: 700; color: #1c1c1e; letter-spacing: 0.5px; }
-  .meta-date { font-size: 12px; color: #a8a49c; margin-top: 2px; }
-  .two-col { display: flex; gap: 32px; margin-bottom: 28px; }
+  .meta-kicker { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.8); }
+  .quote-num { font-size: 16px; font-weight: 700; color: #fff; letter-spacing: 0.5px; margin-top: 2px; }
+  .meta-date { font-size: 11px; color: rgba(255,255,255,0.8); margin-top: 1px; }
+  .two-col { display: flex; gap: 36px; margin-bottom: 18px; }
   .col { flex: 1; }
-  .label { font-size: 9px; font-weight: 700; letter-spacing: 1.8px; text-transform: uppercase; color: #b0ada6; margin-bottom: 6px; }
-  .customer-name { font-size: 20px; font-weight: 700; color: #1c1c1e; }
-  .customer-email { font-size: 12px; color: #8a8880; margin-top: 2px; }
-  .specs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
-  .spec-label { font-size: 9px; letter-spacing: 1.2px; color: #c0bcb5; text-transform: uppercase; }
-  .spec-value { font-size: 13px; font-weight: 600; color: #1c1c1e; }
-  .divider { height: 1px; background: #e8e4dc; margin: 24px 0; }
-  .photos-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 4px; }
-  .photo-card img { width: 100%; height: 210px; object-fit: cover; border-radius: 6px; border: 1px solid #e2ded6; display: block; }
-  .photo-label { font-size: 8px; font-weight: 700; letter-spacing: 1.5px; color: #b0ada6; margin-bottom: 5px; }
+  .label { font-size: 10px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; color: #0A4A9F; margin-bottom: 8px; }
+  .customer-name { font-size: 19px; font-weight: 700; color: #1b232e; }
+  .customer-email { font-size: 12px; color: #6b7280; margin-top: 2px; }
+  .specs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; }
+  .spec-label { font-size: 9.5px; letter-spacing: 1px; color: #6b7280; text-transform: uppercase; }
+  .spec-value { font-size: 13px; font-weight: 600; color: #1b232e; }
+  .divider { height: 1px; background: #e5e7eb; margin: 16px 0; }
+  .photos-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 4px; }
+  .photo-card img { width: 100%; height: 175px; object-fit: cover; border-radius: 8px; border: 1px solid #e5e7eb; display: block; }
+  .photo-label { font-size: 9.5px; font-weight: 700; letter-spacing: 1.2px; color: #6b7280; margin-bottom: 6px; text-transform: uppercase; }
+  .photo-label.after { color: #E1251B; }
   table { width: 100%; border-collapse: collapse; }
   thead th {
-    font-size: 9px; font-weight: 700; letter-spacing: 1.5px;
-    text-transform: uppercase; color: #b0ada6;
-    padding: 0 0 8px; text-align: left;
-    border-bottom: 1px solid #e8e4dc;
+    font-size: 9.5px; font-weight: 700; letter-spacing: 1px;
+    text-transform: uppercase; color: #6b7280;
+    padding: 0 0 9px; text-align: left;
+    border-bottom: 1.5px solid #e5e7eb;
   }
   thead th:last-child { text-align: right; }
   tbody td {
-    padding: 10px 0; font-size: 13px; color: #3a3835;
-    border-bottom: 1px solid #f2f0eb;
+    padding: 9px 0; font-size: 12.5px; color: #374151;
+    border-bottom: 1px solid #f0f2f5;
     vertical-align: top;
   }
-  tbody td:last-child { text-align: right; font-weight: 500; color: #1c1c1e; }
+  tbody td:first-child { font-weight: 600; color: #1b232e; }
+  tbody td:last-child { text-align: right; font-weight: 600; color: #1b232e; white-space: nowrap; }
   .total-row td {
-    border-bottom: none; border-top: 1.5px solid #1c1c1e;
-    padding-top: 12px; font-weight: 700; font-size: 15px;
+    border-bottom: none; border-top: 2px solid #1b232e;
+    padding-top: 13px; font-weight: 800; font-size: 14px;
+    text-transform: uppercase; letter-spacing: 0.4px;
   }
-  .total-row td:last-child { font-size: 20px; color: #1c6b45; }
+  .total-row td:last-child { font-size: 22px; color: #0A4A9F; letter-spacing: 0; }
   .notes-box {
-    background: #f9f8f5; border-radius: 6px;
-    border-left: 2px solid #c8c4ba; padding: 14px 16px; margin-bottom: 24px;
+    background: #f6f8fb; border-radius: 8px;
+    border-left: 3px solid #0A4A9F; padding: 14px 18px; margin-bottom: 24px;
   }
-  .notes-box p { color: #5a5854; font-size: 12px; line-height: 1.7; }
+  .notes-box p { color: #4b5563; font-size: 12px; line-height: 1.7; }
   .footer {
-    border-top: 1px solid #e8e4dc; padding-top: 18px;
-    color: #b0ada6; font-size: 10px; line-height: 1.7; text-align: center;
+    border-top: 1px solid #e5e7eb; padding-top: 18px;
+    color: #6b7280; font-size: 10.5px; line-height: 1.7; text-align: center;
   }
   .validity {
-    display: inline-block; background: #f5f3ef; border-radius: 3px;
-    padding: 3px 10px; font-size: 10px; color: #8a8880; margin-top: 8px;
+    display: inline-block; background: #0A4A9F; color: #fff; border-radius: 20px;
+    padding: 4px 14px; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; margin-top: 8px;
   }
 </style>
 </head>
@@ -241,10 +278,11 @@ export default function QuoteScreen() {
 
 <div class="header">
   <div>
-    <div class="company">Champion Windows</div>
-    <div class="tagline">Sunroom Design Proposal</div>
+    <div class="company">CHAMPION</div>
+    <div class="tagline">Windows &bull; Sunrooms &bull; Home Exteriors</div>
   </div>
   <div class="meta-right">
+    <div class="meta-kicker">Sunroom Proposal</div>
     <div class="quote-num">${quoteNumber}</div>
     <div class="meta-date">${today}</div>
   </div>
@@ -324,15 +362,18 @@ ${
     try {
       // Convert both images to base64 so they embed in the PDF regardless of URI type
       const [beforeB64, afterB64] = await Promise.all([
-        toBase64DataUri(photoUri || ""),
+        toBase64DataUri(beforeUrl),
         toBase64DataUri(afterUrl),
       ]);
 
-      const { uri } = await Print.printToFileAsync({
-        html: buildQuoteHTML(beforeB64, afterB64),
-        base64: false,
-      });
+      // Prefer embedded base64; fall back to the raw URL (the dedicated print
+      // window / native printer can load remote images even if fetch was blocked).
+      const html = buildQuoteHTML(beforeB64 || beforeUrl, afterB64 || afterUrl);
 
+      // Web: print a clean dedicated window (use the browser's "Save as PDF").
+      if (printHtmlWeb(html)) return;
+
+      const { uri } = await Print.printToFileAsync({ html, base64: false });
       const canShare = await Sharing.isAvailableAsync();
       if (canShare) {
         await Sharing.shareAsync(uri, {
@@ -351,10 +392,14 @@ ${
   const handlePrint = async () => {
     try {
       const [beforeB64, afterB64] = await Promise.all([
-        toBase64DataUri(photoUri || ""),
+        toBase64DataUri(beforeUrl),
         toBase64DataUri(afterUrl),
       ]);
-      await Print.printAsync({ html: buildQuoteHTML(beforeB64, afterB64) });
+      // Prefer embedded base64; fall back to the raw URL (the dedicated print
+      // window / native printer can load remote images even if fetch was blocked).
+      const html = buildQuoteHTML(beforeB64 || beforeUrl, afterB64 || afterUrl);
+      if (printHtmlWeb(html)) return;
+      await Print.printAsync({ html });
     } catch (e) {
       console.warn("Print failed:", e);
     }
@@ -379,8 +424,8 @@ ${
         {/* Header */}
         <View style={styles.header}>
           <View>
-            <Text style={styles.company}>Champion Windows</Text>
-            <Text style={styles.tagline}>SUNROOM DESIGN PROPOSAL</Text>
+            <Text style={styles.company}>CHAMPION</Text>
+            <Text style={styles.tagline}>WINDOWS • SUNROOMS • HOME EXTERIORS</Text>
           </View>
           <View style={styles.metaRight}>
             <Text style={styles.quoteNumber}>{quoteNumber}</Text>
@@ -435,28 +480,48 @@ ${
         <View style={styles.divider} />
 
         {/* Before / After */}
-        {(photoUri || afterUrl) && (
+        {(beforeUrl || afterUrl) && (
           <>
             <Text style={styles.sectionLabel}>DESIGN VISUALIZATION</Text>
             <View style={styles.photoRow}>
-              {photoUri ? (
+              {beforeUrl ? (
                 <View style={styles.photoCard}>
                   <Text style={styles.photoLabel}>BEFORE</Text>
-                  <Image
-                    source={{ uri: photoUri }}
-                    style={styles.photoImage}
-                    resizeMode="cover"
-                  />
+                  {beforeErr ? (
+                    <View style={[styles.photoImage, styles.photoFallback]}>
+                      <Text style={styles.photoFallbackText}>
+                        Photo unavailable
+                      </Text>
+                    </View>
+                  ) : (
+                    <Image
+                      source={{ uri: beforeUrl }}
+                      style={styles.photoImage}
+                      resizeMode="contain"
+                      onError={() => setBeforeErr(true)}
+                    />
+                  )}
                 </View>
               ) : null}
               {afterUrl ? (
                 <View style={styles.photoCard}>
-                  <Text style={styles.photoLabel}>AFTER — AI RENDER</Text>
-                  <Image
-                    source={{ uri: afterUrl }}
-                    style={styles.photoImage}
-                    resizeMode="cover"
-                  />
+                  <Text style={[styles.photoLabel, styles.photoLabelAfter]}>
+                    AFTER — AI RENDER
+                  </Text>
+                  {afterErr ? (
+                    <View style={[styles.photoImage, styles.photoFallback]}>
+                      <Text style={styles.photoFallbackText}>
+                        Render unavailable
+                      </Text>
+                    </View>
+                  ) : (
+                    <Image
+                      source={{ uri: afterUrl }}
+                      style={styles.photoImage}
+                      resizeMode="contain"
+                      onError={() => setAfterErr(true)}
+                    />
+                  )}
                 </View>
               ) : null}
             </View>
@@ -599,27 +664,34 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "flex-start",
-    paddingBottom: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: "#E2DED6",
-    marginBottom: 20,
+    alignItems: "flex-end",
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    borderBottomWidth: 4,
+    borderBottomColor: Colors.accent,
+    padding: 18,
+    marginBottom: 22,
   },
   company: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: "800",
-    color: "#1C1C1E",
-    letterSpacing: -0.4,
+    color: Colors.white,
+    letterSpacing: 1,
   },
-  tagline: { fontSize: 11, color: "#A8A49C", letterSpacing: 1.8, marginTop: 3 },
+  tagline: {
+    fontSize: 11,
+    color: "rgba(255,255,255,0.85)",
+    letterSpacing: 1.4,
+    marginTop: 4,
+  },
   metaRight: { alignItems: "flex-end", gap: 2 },
   quoteNumber: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: "700",
-    color: "#1C1C1E",
+    color: Colors.white,
     letterSpacing: 0.5,
   },
-  metaDate: { fontSize: 12, color: "#A8A49C" },
+  metaDate: { fontSize: 12, color: "rgba(255,255,255,0.85)" },
 
   twoCol: { flexDirection: "row", gap: 20, marginBottom: 20 },
   halfCol: { flex: 1, gap: 6 },
@@ -644,7 +716,14 @@ const styles = StyleSheet.create({
 
   divider: { height: 1, backgroundColor: "#E8E4DC", marginVertical: 20 },
 
-  photoRow: { flexDirection: "row", gap: 10, marginBottom: 4 },
+  photoRow: {
+    flexDirection: "row",
+    gap: 14,
+    marginBottom: 4,
+    maxWidth: 1700,
+    width: "100%",
+    alignSelf: "center",
+  },
   photoCard: { flex: 1, gap: 5 },
   photoLabel: {
     fontSize: 11,
@@ -654,10 +733,22 @@ const styles = StyleSheet.create({
   },
   photoImage: {
     width: "100%",
-    height: 160,
+    height: 560,
     borderRadius: 8,
     borderWidth: 0.5,
     borderColor: "#E2DED6",
+    backgroundColor: "#EDEFF2",
+  },
+  photoLabelAfter: { color: Colors.accent },
+  photoFallback: {
+    backgroundColor: "#F0EDE8",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  photoFallbackText: {
+    fontSize: 12,
+    color: "#A8A49C",
+    fontWeight: "600",
   },
 
   priceTable: {
@@ -750,7 +841,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   primaryButton: {
-    backgroundColor: "#1C1C1E",
+    backgroundColor: Colors.primary,
     padding: 16,
     borderRadius: 10,
     alignItems: "center",

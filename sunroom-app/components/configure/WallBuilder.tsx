@@ -1487,6 +1487,12 @@ export default function WallBuilder({
 
   if (!activeWall) return null;
 
+  // Progressive disclosure gates: reveal each part of the builder as the prior
+  // step is filled in, so the screen isn't overwhelming with everything at once.
+  // (If there are no wall-type options to pick, don't block on it.)
+  const hasWallType = !!selectedWallType || baseWallTypeOptions.length === 0;
+  const hasDims = wallWIn > 0 && wallHIn > 0;
+
   return (
     <View style={styles.container}>
       <View style={styles.sectionCard}>
@@ -1565,6 +1571,18 @@ export default function WallBuilder({
         )}
       </View>
 
+      {!hasWallType && (
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionBlock}>
+            <Text style={styles.sectionHint}>
+              Pick a wall type above to start configuring this wall.
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {hasWallType && (
+        <>
       {walls.length > 1 && (
         <View style={styles.tabsRow}>
           {walls.map((w) => (
@@ -1655,7 +1673,16 @@ export default function WallBuilder({
           </View>
         </View>
 
-        {canHaveGableGlass && (
+        {!hasDims && (
+          <View style={styles.sectionBlock}>
+            <Text style={styles.sectionHint}>
+              Enter width and height above to design the wall, choose panels, and
+              set glass.
+            </Text>
+          </View>
+        )}
+
+        {hasDims && canHaveGableGlass && (
           <View
             style={[
               styles.sectionBlock,
@@ -1803,6 +1830,7 @@ export default function WallBuilder({
           </View>
         )}
 
+        {hasDims && (
         <View style={styles.canvasBlock}>
           <View style={{ alignItems: "center" }}>
             {activeWall.gableGlass && (
@@ -1916,7 +1944,7 @@ export default function WallBuilder({
                         <View key={i} style={{ alignItems: "center", gap: 2 }}>
                           <Text
                             style={{
-                              fontSize: 10,
+                              fontSize: 12,
                               color: Colors.text.tertiary,
                             }}
                           >
@@ -1943,8 +1971,9 @@ export default function WallBuilder({
             )}
           </View>
         </View>
+        )}
 
-        {autoAddedKeys.length > 0 && (
+        {hasDims && autoAddedKeys.length > 0 && (
           <View style={styles.autoChipsBlock}>
             <Text style={styles.autoChipsLabel}>Auto-added</Text>
             <View style={styles.autoChipsRow}>
@@ -1962,7 +1991,7 @@ export default function WallBuilder({
         )}
       </View>
 
-      {(anyWallHasTransom || anyWallHasKneewall) && (
+      {hasDims && (anyWallHasTransom || anyWallHasKneewall) && (
         <View style={styles.sectionCard}>
           <TouchableOpacity
             style={styles.collapsibleHeader}
@@ -2103,15 +2132,19 @@ export default function WallBuilder({
         </View>
       )}
 
-      <WallAddOnsSection
-        wallId={activeWall.id}
-        allOptions={allOptions}
-        wallAddOns={wallAddOns[activeWall.id] ?? {}}
-        onToggle={(optId) => onWallAddOnToggle(activeWall.id, optId)}
-        onQuantityChange={(optId, qty) =>
-          onWallAddOnQuantityChange(activeWall.id, optId, qty)
-        }
-      />
+      {hasDims && (
+        <WallAddOnsSection
+          wallId={activeWall.id}
+          allOptions={allOptions}
+          wallAddOns={wallAddOns[activeWall.id] ?? {}}
+          onToggle={(optId) => onWallAddOnToggle(activeWall.id, optId)}
+          onQuantityChange={(optId, qty) =>
+            onWallAddOnQuantityChange(activeWall.id, optId, qty)
+          }
+        />
+      )}
+        </>
+      )}
 
       {modalUnitIndex !== null && (
         <PanelPickerModal
@@ -2205,7 +2238,7 @@ const styles = StyleSheet.create({
   },
   wallTypeChipSelected: {
     borderColor: Colors.primary,
-    backgroundColor: "#EEF2FF",
+    backgroundColor: Colors.primaryTint,
   },
   wallTypeChipText: {
     fontSize: 12,
@@ -2213,7 +2246,7 @@ const styles = StyleSheet.create({
     color: Colors.text.primary,
   },
   wallTypeChipTextSel: { color: Colors.primary },
-  wallTypeChipPrice: { fontSize: 10, color: Colors.text.tertiary },
+  wallTypeChipPrice: { fontSize: 12, color: Colors.text.tertiary },
   colorPickerRow: { flexDirection: "row", gap: 10 },
   colorSwatch: {
     flex: 1,
@@ -2229,7 +2262,7 @@ const styles = StyleSheet.create({
   },
   colorSwatchSelected: {
     borderColor: Colors.primary,
-    backgroundColor: "#EEF2FF",
+    backgroundColor: Colors.primaryTint,
   },
   colorDot: { width: 22, height: 22, borderRadius: 11, borderWidth: 2 },
   colorSwatchLabel: {
@@ -2277,7 +2310,7 @@ const styles = StyleSheet.create({
   dimInputAccentKnee: { borderColor: "#b06040", borderWidth: 2 },
   dimInputRequired: { borderColor: "#e03030", borderWidth: 2 },
   dimConvert: {
-    fontSize: 10,
+    fontSize: 12,
     color: Colors.text.tertiary,
     textAlign: "center",
     fontStyle: "italic",
@@ -2316,7 +2349,7 @@ const styles = StyleSheet.create({
     paddingTop: 10,
   },
   autoChipsLabel: {
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: "700",
     color: Colors.primary,
     textTransform: "uppercase",
@@ -2324,7 +2357,7 @@ const styles = StyleSheet.create({
   },
   autoChipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   autoChip: {
-    backgroundColor: "#EEF2FF",
+    backgroundColor: Colors.primaryTint,
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 4,
@@ -2375,7 +2408,7 @@ const styles = StyleSheet.create({
   },
   gableToggleActive: {
     borderColor: Colors.primary,
-    backgroundColor: "#EEF2FF",
+    backgroundColor: Colors.primaryTint,
   },
   gableToggleText: {
     fontSize: 12,
@@ -2392,7 +2425,7 @@ const styles = StyleSheet.create({
   },
   gableRow: { flexDirection: "row", gap: 14 },
   priceNote: {
-    backgroundColor: "#EEF2FF",
+    backgroundColor: Colors.primaryTint,
     borderRadius: 8,
     padding: 10,
     alignItems: "center",
@@ -2491,7 +2524,7 @@ const styles = StyleSheet.create({
   addOnCheckMark: { fontSize: 12, fontWeight: "700", color: "#fff" },
   addOnRowInfo: { flex: 1, gap: 1 },
   addOnRowName: { fontSize: 12, fontWeight: "500", color: Colors.text.primary },
-  addOnRowPrice: { fontSize: 10, color: Colors.text.tertiary },
+  addOnRowPrice: { fontSize: 12, color: Colors.text.tertiary },
   addOnQtyInput: {
     width: 60,
     backgroundColor: Colors.background,
@@ -2573,7 +2606,7 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 8,
   },
-  overrideHint: { fontSize: 10, color: Colors.text.tertiary, marginTop: -4 },
+  overrideHint: { fontSize: 12, color: Colors.text.tertiary, marginTop: -4 },
   overrideInput: {
     backgroundColor: Colors.surface,
     borderRadius: 7,
@@ -2608,7 +2641,7 @@ const styles = StyleSheet.create({
   },
   doorStyleBtnActive: {
     borderColor: Colors.primary,
-    backgroundColor: "#EEF2FF",
+    backgroundColor: Colors.primaryTint,
   },
   doorStyleBtnText: {
     fontSize: 13,
@@ -2682,6 +2715,6 @@ const styles = StyleSheet.create({
   },
   unitWidthInputLocked: {
     borderColor: Colors.primary,
-    backgroundColor: "#EEF2FF",
+    backgroundColor: Colors.primaryTint,
   },
 });

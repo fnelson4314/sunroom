@@ -1285,7 +1285,7 @@ const styles = StyleSheet.create({
   },
   optionCardSelected: {
     borderColor: Colors.primary,
-    backgroundColor: "#EEF2FF",
+    backgroundColor: Colors.primaryTint,
   },
   optionName: { fontSize: 14, fontWeight: "600", color: Colors.text.primary },
   optionNameSelected: { color: Colors.primary },
@@ -1303,7 +1303,7 @@ const styles = StyleSheet.create({
   },
   wallCountCardSelected: {
     borderColor: Colors.primary,
-    backgroundColor: "#EEF2FF",
+    backgroundColor: Colors.primaryTint,
   },
   wallCountNumber: {
     fontSize: 32,
@@ -1438,7 +1438,7 @@ const styles = StyleSheet.create({
     color: Colors.text.secondary,
   },
   generateEarlyButton: {
-    backgroundColor: "#EEF2FF",
+    backgroundColor: Colors.primaryTint,
     borderRadius: 10,
     padding: 10,
     alignItems: "center",
@@ -1476,7 +1476,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   roofDimResult: {
-    backgroundColor: "#EEF2FF",
+    backgroundColor: Colors.primaryTint,
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 8,
