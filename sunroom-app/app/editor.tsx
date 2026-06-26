@@ -212,7 +212,7 @@ const styles = StyleSheet.create({
   },
   primaryActions: { marginTop: 4 },
   primaryButton: {
-    backgroundColor: Colors.accent,
+    backgroundColor: Colors.primary,
     padding: 17,
     borderRadius: 12,
     alignItems: "center",

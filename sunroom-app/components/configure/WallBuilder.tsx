@@ -1489,9 +1489,13 @@ export default function WallBuilder({
 
   // Progressive disclosure gates: reveal each part of the builder as the prior
   // step is filled in, so the screen isn't overwhelming with everything at once.
-  // (If there are no wall-type options to pick, don't block on it.)
-  const hasWallType = !!selectedWallType || baseWallTypeOptions.length === 0;
+  // (If there are no wall-type options to pick, don't block on it.) Once the wall
+  // already has dimensions — e.g. an existing config after switching product
+  // lines (which resets wallType) — show everything instead of re-gating behind
+  // re-picking the wall type.
   const hasDims = wallWIn > 0 && wallHIn > 0;
+  const hasWallType =
+    !!selectedWallType || baseWallTypeOptions.length === 0 || hasDims;
 
   return (
     <View style={styles.container}>

@@ -545,7 +545,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.status.complete,
   },
   primaryButton: {
-    backgroundColor: Colors.accent,
+    backgroundColor: Colors.primary,
     paddingHorizontal: 32,
     paddingVertical: 16,
     borderRadius: 14,

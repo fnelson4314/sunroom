@@ -908,20 +908,6 @@ export default function ConfigureScreen() {
               ))}
             </View>
 
-            <Text style={styles.fieldLabel}>Shingle / Roof Color Match</Text>
-            <Text style={styles.fieldHint}>
-              Describe the existing home's roof color to match
-            </Text>
-            <TextInput
-              style={styles.noteInput}
-              value={configure.state.roofColorNote}
-              onChangeText={configure.setRoofColorNote}
-              placeholder="e.g. Charcoal grey architectural shingles"
-              placeholderTextColor={Colors.text.tertiary}
-              multiline
-              numberOfLines={2}
-            />
-
             <Text style={styles.fieldLabel}>Roof Add-Ons</Text>
             {roofAddOnOptions.map((option) => (
               <LineItemRow
@@ -1417,7 +1403,7 @@ const styles = StyleSheet.create({
   nextButtonText: { fontSize: 15, fontWeight: "600", color: Colors.white },
   generateButton: {
     flex: 2,
-    backgroundColor: Colors.status.complete,
+    backgroundColor: Colors.primary,
     borderRadius: 12,
     padding: 14,
     alignItems: "center",
