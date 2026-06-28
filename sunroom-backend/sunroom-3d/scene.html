@@ -57,23 +57,32 @@
       // glass sky-reflection until now, making dark glass read as a solid panel.
       var SKY_ENV; // equirect sky texture, set in renderScene
 
-      function glassMat(hex, opacity = 0.78) {
-        // DARK tinted glass. The whole point is CONTRAST: white aluminum frames +
-        // white/tan solid panels are light, so the glass must be dark to stand out
-        // — otherwise everything reads as one white mass and the AI paints solid
-        // panels where glass should be. High opacity + a low sky reflection keeps
-        // it dark (a bright reflection washed it light before). Matches how real
-        // tinted sunroom glass photographs against white frames (what the LoRA learned).
+      function glassMat(hex, opacity = 0.8) {
+        // Semi-transparent dark glass with a sky sheen — reads as real glass.
+        // The catch in Canny mode: see-through glass also reveals the EXISTING
+        // HOUSE behind the sunroom (its roof eave, window tops, siding), and Canny
+        // traces those background lines AS IF they were sunroom mullions → phantom
+        // transoms. The fix is NOT to make the glass opaque (that paints flat black
+        // panels — no glass), but to put an OPAQUE DARK INTERIOR behind the glass
+        // (see the interior occluder box + gable backing in renderScene/buildGable).
+        // Then the glass shows a uniform dark room + sky reflection — exactly how
+        // real sunroom glass photographs — with no background structure to copy.
         const m = new THREE.MeshPhysicalMaterial({
           color: hex,
           transparent: true,
           opacity,
-          roughness: 0.12,
+          // LOW reflection on purpose. A strong sky reflection washes the glass
+          // light, so the WHITE frames lose contrast against it and Canny drops
+          // the thin mullions (→ wrong panel count / merged panels in the output).
+          // Dark, low-reflection glass keeps the white frames high-contrast so
+          // Canny traces every frame. The FINAL glass tone is set by the prompt,
+          // not this composite color, so dark composite glass ≠ dark output.
+          roughness: 0.3,
           metalness: 0.0,
-          clearcoat: 0.7,
-          clearcoatRoughness: 0.08,
-          reflectivity: 0.6,
-          envMapIntensity: 0.95,
+          clearcoat: 0.15,
+          clearcoatRoughness: 0.2,
+          reflectivity: 0.2,
+          envMapIntensity: 0.2,
           side: THREE.DoubleSide,
         });
         if (SKY_ENV) m.envMap = SKY_ENV; // subtle sky sheen only — kept low on purpose
@@ -185,7 +194,7 @@
         if (hasTransom) {
           const tmat =
             unit.transom_mat === "glass"
-              ? glassMat(0x2b4754, 0.78)
+              ? glassMat(0x2b4754, 0.8)
               : solidMat(0xc8bcaa);
           g.add(box(w - fw * 2, tH, D, tmat, w / 2, h - tH / 2, 0));
           // bolder divider rail so Canny clearly separates the transom from the
@@ -201,8 +210,8 @@
           : isDoor
             ? glassMat(0x2f4f5e, 0.74)
             : isOper
-              ? glassMat(0x2b4754, 0.78)
-              : glassMat(0x2b4754, 0.78);
+              ? glassMat(0x2b4754, 0.8)
+              : glassMat(0x2b4754, 0.8);
         g.add(box(w - fw * 2, glH, D, mainMat, w / 2, glCY, 0));
         if (isDoor && ["sliding", "french"].includes(unit.door_style)) {
           // Bold center meeting stile so Canny reads TWO glass panels (a sliding
@@ -226,7 +235,7 @@
           const kmat =
             unit.kneewall_mat === "solid"
               ? solidMat(0xc8bcaa)
-              : glassMat(0x2b4754, 0.78);
+              : glassMat(0x2b4754, 0.8);
           g.add(box(w, fw, D * 1.2, fmat, w / 2, kH + fw / 2, 0));
           g.add(box(w - fw * 2, kH, D, kmat, w / 2, kH / 2, 0));
         }
@@ -241,20 +250,31 @@
           wallH = wall.height_in / 12;
         const fmat = frameMat(fc);
         let curX = fw;
+        const dividers = []; // x of each frame BETWEEN units, for gable alignment
         for (const unit of wall.units) {
           const uw = unit.width_in / 12;
           const panel = buildPanel(unit, uw, wallH - fw * 2, fw, fc);
           panel.position.set(curX, fw, 0);
           g.add(panel);
           curX += uw;
+          dividers.push(curX);
+        }
+        dividers.pop(); // last is the right edge, not an internal divider
+        // Thick structural POSTS between units — real sunrooms have a chunky
+        // vertical post where two units meet, distinct from the thin sash bar
+        // inside an operable window (that one stays fw*0.4 in buildPanel). Drawn
+        // proud (forward z) so Canny reads a bold post, not a hairline.
+        const postW = fw * 3.0; // wider than the ~2*fw band the panel edges make
+        for (const dx of dividers) {
+          g.add(box(postW, wallH - fw * 2, 0.16, fmat, dx, wallH / 2, 0.03));
         }
         g.add(frameBorder(wallW, wallH, 0.12, fw, fmat));
         if (isGable && roofStyle === "gable")
-          g.add(buildGable(wallW, wallH, fw, shHex, wall.gable_glass, fc));
+          g.add(buildGable(wallW, wallH, fw, shHex, wall.gable_glass, fc, dividers));
         return g;
       }
 
-      function buildGable(wallW, wallH, fw, shHex, gableGlass, fc) {
+      function buildGable(wallW, wallH, fw, shHex, gableGlass, fc, dividers) {
         const g = new THREE.Group();
         const gH = wallH * 0.42,
           peakX = wallW / 2,
@@ -278,7 +298,7 @@
         // instead of glass. The sky reflection (now enabled) keeps it from going
         // flat-black.
         const faceMat = isGlass
-          ? glassMat(0x2b4754, 0.86)
+          ? glassMat(0x2b4754, 0.8)
           : gableGlass && glassType === "solid"
             ? solidMat(0xc8bcaa)
             : shingleMat(shHex);
@@ -287,23 +307,42 @@
         face.castShadow = true;
         g.add(face);
 
+        // Dark backing behind a GLASS gable so it shows a dark interior instead of
+        // the roof/sky behind it (the interior occluder box only reaches the wall
+        // top; the gable sits above it). Same purpose: no background bleed-through.
+        if (isGlass) {
+          const gableBack = new THREE.Mesh(
+            new THREE.ShapeGeometry(shape),
+            new THREE.MeshBasicMaterial({ color: 0x171c1f }),
+          );
+          gableBack.position.z = -0.2;
+          g.add(gableBack);
+        }
+
         const fmat = frameMat(fc);
 
-        // Glass gable: vertical mullions dividing the triangle into paneCount
-        // panes, each capped by the roof slope, plus a sill along the base.
-        if (isGlass && paneCount > 1) {
-          const slopeY = (x) =>
-            x <= peakX
-              ? wallH + (gH / peakX) * x
-              : wallH + (gH / peakX) * (wallW - x);
-          for (let i = 1; i < paneCount; i++) {
-            const mx = (wallW / paneCount) * i;
-            const topY = slopeY(mx);
-            const h = Math.max(0.05, topY - wallH);
-            // bolder mullions so Canny reads the gable as divided glass panes,
-            // not one solid triangle
-            g.add(box(fw * 1.1, h, D * 1.3, fmat, mx, wallH + h / 2, 0.06));
-          }
+        // Glass gable mullions. ALIGN them to the wall's unit dividers so the
+        // verticals run continuously from the units up into the gable. The old
+        // code divided the full width evenly from 0, but the units start inset by
+        // one frame-width, so the gable mullions sat ~fw off from the unit frames
+        // below — the "gable and unit frames are a little off" stagger. Fall back
+        // to even paneCount division if no dividers were passed.
+        const slopeY = (x) =>
+          x <= peakX
+            ? wallH + (gH / peakX) * x
+            : wallH + (gH / peakX) * (wallW - x);
+        let mullionXs = [];
+        if (isGlass && dividers && dividers.length) {
+          mullionXs = dividers.filter((x) => x > 0.05 && x < wallW - 0.05);
+        } else if (isGlass && paneCount > 1) {
+          for (let i = 1; i < paneCount; i++) mullionXs.push((wallW / paneCount) * i);
+        }
+        for (const mx of mullionXs) {
+          const topY = slopeY(mx);
+          const h = Math.max(0.05, topY - wallH);
+          // Match the between-unit POST width (fw*3.0 in buildWall) so each
+          // vertical reads as one continuous post from the unit up into the gable.
+          g.add(box(fw * 3.0, h, D * 1.3, fmat, mx, wallH + h / 2, 0.06));
         }
         // (No separate gable sill — the wall's own top frame rail already sits
         // here. A second bar stacked on it made a double-thick band; one rail
@@ -645,6 +684,28 @@
 
         sunroom.add(buildRoof(wallW_B, wallW_C, wallH, roofStyle, shHex, fc));
         sunroom.add(buildShadow(wallW_B, wallW_C));
+
+        // ── Opaque dark INTERIOR occluder ──────────────────────────────────────
+        // Sits just inside the glass walls so the see-through glass reveals a
+        // uniform dark room — NOT the real house behind the sunroom. Without it,
+        // the house's eave/window/siding lines bleed through the glass and Canny
+        // copies them as phantom transoms/mullions. Unlit dark = no internal edges,
+        // so the AI paints clean glass (dark interior + the sky sheen reflected on
+        // the glass surface), which is how real sunroom glass photographs.
+        {
+          const inset = 0.5; // ft inside each wall, so it never pokes through glass
+          const ih = Math.max(0.1, wallH - 0.2);
+          const interior = new THREE.Mesh(
+            new THREE.BoxGeometry(
+              Math.max(0.1, wallW_C - inset * 2),
+              ih,
+              Math.max(0.1, wallW_B - inset * 2),
+            ),
+            new THREE.MeshBasicMaterial({ color: 0x171c1f }),
+          );
+          interior.position.set(wallW_C / 2, ih / 2 + 0.1, wallW_B / 2);
+          sunroom.add(interior);
+        }
 
         // Debug spheres — at PnP world positions (positive Z). Only drawn when
         // payload.debug is set; they must NOT appear in production renders that

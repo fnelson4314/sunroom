@@ -44,6 +44,7 @@ REDIS_URL=redis://127.0.0.1:6379
 API_KEY=dev-key-123
 LORA_SCALE=0.85
 RENDERER_3D_URL=http://localhost:3001
+NUM_VARIATIONS=1   # 1 = single render (default, no extra credits); set e.g. 5 for parallel variations
 ```
 
 **Frontend** — copy `sunroom-app/services/config.example.ts` → `sunroom-app/services/config.ts` and fill in:
@@ -61,9 +62,11 @@ API_KEY=dev-key-123
 2. Photo uploads directly to Supabase Storage (bypasses backend)
 3. Multi-step configurator (`configure.tsx`) collects wall system, dimensions, materials, roof style, doors, options
 4. `POST /generate/` enqueues a Celery task and returns immediately
-5. Celery task calls the 3D renderer service → gets a preview JPEG → calls Replicate FLUX Fill (inpainting) with a masked region → stores 2–4 variation URLs back in Supabase
-6. Frontend polls `GET /generate/status/{session_id}` every 4 seconds (`generate.tsx`)
-7. Completed renders shown in `editor.tsx`; pricing summary in `quote.tsx`
+5. Celery task calls the 3D renderer service → gets a preview composite + structure mask → runs the AI repaint (FLUX). The shared setup (prompt, resize, composite, mask) runs once, then the AI repaint is **fanned out into `NUM_VARIATIONS` parallel passes** (distinct seeds) → stores the list in `configurations.render_urls` (and the first in `render_url`)
+6. Frontend polls `GET /generate/status/{session_id}` every 4 seconds (`generate.tsx`); status returns `render_urls`
+7. Completed renders shown in `editor.tsx` as a swipe + thumbnail gallery (the selected one flows to the quote); pricing summary in `quote.tsx`
+
+> **Parallel variations:** `NUM_VARIATIONS` (backend `.env`, default `1`) is both the feature flag and the count — `1` = single render / no extra credits, `5` = five variations in parallel (~5× inference credits, ≈ same wall-clock). Requires a one-time migration: `ALTER TABLE configurations ADD COLUMN render_urls jsonb;` (the code degrades gracefully to single-render if the column is missing).
 
 ### Backend Routers (`sunroom-backend/app/routers/`)
 

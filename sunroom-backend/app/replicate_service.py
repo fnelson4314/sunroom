@@ -354,6 +354,7 @@ def run_flux_fill_lora(
     wall_system: str,
     roof_style: str,
     strength: float = 1.0,
+    seed: int | None = None,
 ) -> str:
     """
     FLUX Fill Dev with trained sunroom LoRA.
@@ -383,6 +384,10 @@ def run_flux_fill_lora(
         "output_format":  "jpg",
         "output_quality": 95,
     }
+    # Distinct seed per parallel variation → different photoreal outputs from the
+    # same composite/mask. Omit (None) to let Replicate randomise.
+    if seed is not None:
+        input_data["seed"] = seed
 
     lora_url = get_lora_url(wall_system, roof_style) if use_lora else None
     if lora_url:
@@ -515,6 +520,7 @@ def run_flux_control_dev(
     prompt: str,
     wall_system: str,
     roof_style: str,
+    seed: int | None = None,
 ) -> str:
     """
     First-party Black Forest Labs structure-conditioned generation
@@ -548,6 +554,10 @@ def run_flux_control_dev(
         "output_format":       "jpg",
         "output_quality":      95,
     }
+    # Distinct seed per parallel variation → different photoreal outputs from the
+    # same composite. Omit (None) to let Replicate randomise.
+    if seed is not None:
+        input_data["seed"] = seed
 
     # LoRA is OFF by default — the previous one carried watermarks. Re-enable only
     # with a clean retrained LoRA via FLUX_CONTROL_USE_LORA=true.

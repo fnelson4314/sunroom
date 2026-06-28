@@ -96,6 +96,9 @@ export type ConfigureState = {
   wallColor: "white" | "tan" | "bronze" | null;
   lineItems: Record<string, string>;
   wallType: Option | null;
+  // Remembered base wall type per product line id, so switching lines and back
+  // restores the previously selected wall type for that line.
+  wallTypeByLine: Record<string, Option>;
   walls: WallSelection[];
   wallAddOns: Record<string, Record<string, string>>;
   defaultTransomHeightIn: string; // global default transom height (inches)
@@ -242,6 +245,7 @@ const initialState: ConfigureState = {
   wallColor: null,
   lineItems: {},
   wallType: null,
+  wallTypeByLine: {},
   walls: [],
   wallAddOns: {},
   defaultTransomHeightIn: "",
@@ -268,7 +272,20 @@ export function useConfigureState() {
   // ─── Step 1 ────────────────────────────────────────────────────────────────
 
   const setProductLine = (pl: ProductLine) =>
-    setState((prev) => ({ ...prev, selectedProductLine: pl, wallType: null }));
+    setState((prev) => {
+      // Remember the wall type chosen for the line we're leaving, and restore the
+      // one previously chosen for the line we're switching to (if any).
+      const byLine = { ...prev.wallTypeByLine };
+      if (prev.selectedProductLine && prev.wallType) {
+        byLine[prev.selectedProductLine.id] = prev.wallType;
+      }
+      return {
+        ...prev,
+        selectedProductLine: pl,
+        wallTypeByLine: byLine,
+        wallType: byLine[pl.id] ?? null,
+      };
+    });
 
   const setRoofStyle = (style: ConfigureState["roofStyle"]) => {
     setState((prev) => {
@@ -588,6 +605,11 @@ export function useConfigureState() {
     setState((prev) => ({
       ...prev,
       wallType: option,
+      // Remember this choice for the current product line so it's restored on
+      // switching back to this line later.
+      wallTypeByLine: prev.selectedProductLine
+        ? { ...prev.wallTypeByLine, [prev.selectedProductLine.id]: option }
+        : prev.wallTypeByLine,
       // Reset frame color when switching away from a tan/bronze wall type.
       // Default to "tan" when switching INTO a tan/bronze type so the canvas
       // immediately reflects the frame color instead of staying white.
@@ -1382,6 +1404,9 @@ export function useConfigureState() {
       box_x2,
       box_y2,
       productLineId: state.selectedProductLine?.id,
+      // wallSystem drives the backend's product-line behavior (screen vs glass,
+      // LoRA). It was previously omitted, so generate.tsx always sent "" — fixed.
+      wallSystem: state.selectedProductLine?.wall_system ?? "",
       selectedOptions: JSON.stringify(uniqueOptions),
       wallData: JSON.stringify(wallDataForBackend),
       lineItems: JSON.stringify(state.lineItems),

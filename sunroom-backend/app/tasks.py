@@ -16,6 +16,8 @@ import base64
 import logging
 import json
 import os
+import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
 import io
 
@@ -44,6 +46,14 @@ FLUX_REPAINT_STRENGTH = float(os.environ.get("FLUX_REPAINT_STRENGTH", "0.85"))
 # Manual vertical nudge (feet) to seat the structure on the ground when the
 # traced markers sit slightly above the real patio. Positive drops it down.
 STRUCTURE_DROP_FT = float(os.environ.get("STRUCTURE_DROP_FT", "0"))
+# ── Parallel variations (feature flag + count, one knob) ──────────────────────
+# How many photoreal renders to generate per request. The expensive setup
+# (prompt, photo resize, 3D composite, mask) runs ONCE; only the AI repaint is
+# fanned out, concurrently, with a distinct seed each → the user picks the best.
+#   1  → single render, identical to the old behavior, ZERO extra credit spend.
+#   5  → five variations in parallel (≈ same wall-clock, ~5× inference credits).
+# Set NUM_VARIATIONS in the backend .env. Clamped to a sane [1, 8].
+NUM_VARIATIONS = max(1, min(8, int(os.environ.get("NUM_VARIATIONS", "1"))))
 
 
 def _photo_dimensions(photo_bytes: bytes) -> tuple[int, int]:
@@ -304,65 +314,127 @@ def generate_sunroom(
         if is_cancelled():
             return {"status": "cancelled"}
 
-        # ── Step 7: AI repaint ────────────────────────────────────────────────
-        if use_composite and FLUX_REPAINT_MODE == "controlnet":
-            # Structure-locked photoreal pass via a first-party BFL control model.
-            # Canny edges of the composite pin the geometry/angle/config; there's
-            # no mask, so the whole frame is regenerated and Step 8 restores the
-            # real background. Clean weights → no watermark text.
-            logger.info(f"[{session_id}] Running first-party control model (canny/depth)")
-            render_url = run_flux_control_dev(
-                control_image_url=inpaint_image_url,
-                prompt=positive_prompt,
-                wall_system=wall_system,
-                roof_style=roof_style,
-            )
-        else:
-            logger.info(
-                f"[{session_id}] Running FLUX Fill (mode={FLUX_REPAINT_MODE}, "
-                f"strength={repaint_strength})"
-            )
-            render_url = run_flux_fill_lora(
-                image_url=inpaint_image_url,
-                mask_url=mask_url,
-                prompt=positive_prompt,
-                negative_prompt=negative_prompt,
-                wall_system=wall_system,
-                roof_style=roof_style,
-                strength=repaint_strength,
-            )
+        # ── Steps 7 + 8: AI repaint, fanned out into NUM_VARIATIONS ───────────
+        # Everything above (prompt, resized photo, 3D composite, mask) is shared
+        # across variations and already done. Only the AI repaint + the
+        # background-restore composite differ per variation, so we run them
+        # concurrently with a distinct seed each and let the user pick the best.
+        #
+        # The masked-composite step (Step 8) restores everything outside the
+        # sunroom from the ORIGINAL photo, so the house/pool/sky stay pixel-
+        # identical and any stray text artifacts are discarded. For controlnet
+        # mode this is required (the model renoises the whole frame).
+        needs_composite = use_composite and FLUX_REPAINT_MODE in ("full", "controlnet")
+
+        # Pre-fetch the composite mask ONCE (not per variation) when we'll need it.
+        composite_mask_bytes = silhouette_mask_bytes
+        if needs_composite and composite_mask_bytes is None:
+            try:
+                with httpx.Client(timeout=30) as client:
+                    composite_mask_bytes = client.get(mask_url).content
+            except Exception as mask_err:
+                logger.warning(f"[{session_id}] Could not prefetch mask ({mask_err})")
+
+        def render_one(index: int, seed: int) -> str:
+            """One photoreal variation: AI repaint (Step 7) + background restore
+            (Step 8). Returns the final render URL. Raises on failure so the
+            caller can skip just this variation."""
+            if use_composite and FLUX_REPAINT_MODE == "controlnet":
+                out_url = run_flux_control_dev(
+                    control_image_url=inpaint_image_url,
+                    prompt=positive_prompt,
+                    wall_system=wall_system,
+                    roof_style=roof_style,
+                    seed=seed,
+                )
+            else:
+                out_url = run_flux_fill_lora(
+                    image_url=inpaint_image_url,
+                    mask_url=mask_url,
+                    prompt=positive_prompt,
+                    negative_prompt=negative_prompt,
+                    wall_system=wall_system,
+                    roof_style=roof_style,
+                    strength=repaint_strength,
+                    seed=seed,
+                )
+
+            if needs_composite and composite_mask_bytes is not None:
+                try:
+                    composited_bytes = composite_masked(
+                        out_url, photo_bytes, composite_mask_bytes
+                    )
+                    out_url = upload_bytes(composited_bytes, "jpg", "renders")
+                    logger.info(f"[{session_id}] [v{index}] Masked composite applied")
+                except Exception as comp_err:
+                    logger.warning(
+                        f"[{session_id}] [v{index}] Masked composite failed "
+                        f"({comp_err}) — using raw AI output"
+                    )
+            return out_url
+
+        n = NUM_VARIATIONS
+        base_seed = random.randint(1, 2_000_000_000)
+        logger.info(
+            f"[{session_id}] Running {n} variation(s) "
+            f"(mode={FLUX_REPAINT_MODE}, strength={repaint_strength})"
+        )
+
+        results: list[str | None] = [None] * n
+        with ThreadPoolExecutor(max_workers=n) as pool:
+            future_to_index = {
+                pool.submit(render_one, i, base_seed + i): i for i in range(n)
+            }
+            for future in as_completed(future_to_index):
+                i = future_to_index[future]
+                try:
+                    results[i] = future.result()
+                    logger.info(f"[{session_id}] [v{i}] complete: {results[i]}")
+                except Exception as var_err:
+                    logger.warning(f"[{session_id}] [v{i}] failed: {var_err}")
 
         if is_cancelled():
             logger.info(f"[{session_id}] Cancelled after Replicate returned — discarding")
             return {"status": "cancelled"}
 
-        # ── Step 8: Restore everything outside the sunroom ────────────────────
-        # The ControlNet model renoises the whole frame, so composite its output
-        # back over the ORIGINAL photo through the mask: only the sunroom region
-        # changes; house, pool and sky stay pixel-identical and any stray text
-        # artifacts outside the structure are discarded.
-        if use_composite and FLUX_REPAINT_MODE in ("full", "controlnet"):
-            try:
-                cm_bytes = silhouette_mask_bytes
-                if cm_bytes is None:
-                    with httpx.Client(timeout=30) as client:
-                        cm_bytes = client.get(mask_url).content
-                composited_bytes = composite_masked(render_url, photo_bytes, cm_bytes)
-                render_url = upload_bytes(composited_bytes, "jpg", "renders")
-                logger.info(f"[{session_id}] Masked composite applied: {render_url}")
-            except Exception as comp_err:
-                logger.warning(
-                    f"[{session_id}] Masked composite failed ({comp_err}) — "
-                    f"using raw AI output"
-                )
+        # Keep submission order (variation 0..n-1) so the gallery is stable.
+        render_urls = [url for url in results if url]
+        if not render_urls:
+            raise Exception("all variations failed")
 
-        supabase.table("configurations")\
-            .update({"status": "complete", "render_url": render_url})\
-            .eq("id", session_id)\
-            .execute()
+        primary_url = render_urls[0]
+        # Persist the full list in render_urls; keep render_url = first for the
+        # screens (quote, session detail) that still read the single column.
+        try:
+            supabase.table("configurations")\
+                .update({
+                    "status": "complete",
+                    "render_url": primary_url,
+                    "render_urls": render_urls,
+                })\
+                .eq("id", session_id)\
+                .execute()
+        except Exception as col_err:
+            # render_urls column not migrated yet — degrade gracefully to single.
+            logger.warning(
+                f"[{session_id}] Could not write render_urls ({col_err}) — "
+                f"run the migration: ALTER TABLE configurations "
+                f"ADD COLUMN render_urls jsonb;"
+            )
+            supabase.table("configurations")\
+                .update({"status": "complete", "render_url": primary_url})\
+                .eq("id", session_id)\
+                .execute()
 
-        logger.info(f"[{session_id}] Generation complete: {render_url}")
-        return {"status": "complete", "render_url": render_url}
+        logger.info(
+            f"[{session_id}] Generation complete: {len(render_urls)}/{n} "
+            f"variation(s), primary {primary_url}"
+        )
+        return {
+            "status": "complete",
+            "render_url": primary_url,
+            "render_urls": render_urls,
+        }
 
     except Exception as e:
         if is_cancelled():

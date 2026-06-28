@@ -82,6 +82,7 @@ export default function GenerateScreen() {
   const [status, setStatus] = useState<GenerateStatus>("uploading");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [renderUrl, setRenderUrl] = useState<string | null>(null);
+  const [renderUrls, setRenderUrls] = useState<string[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Ref to hold poll interval so we can clear it
@@ -228,7 +229,16 @@ export default function GenerateScreen() {
 
         if (result.status === "complete") {
           clearInterval(pollRef.current!);
-          setRenderUrl(result.render_url);
+          // Backend returns render_urls (parallel variations). Fall back to the
+          // single render_url for older responses.
+          const urls: string[] =
+            Array.isArray(result.render_urls) && result.render_urls.length
+              ? result.render_urls
+              : result.render_url
+                ? [result.render_url]
+                : [];
+          setRenderUrls(urls);
+          setRenderUrl(urls[0] ?? result.render_url ?? null);
           setStatus("complete");
         } else if (result.status === "failed") {
           clearInterval(pollRef.current!);
@@ -254,6 +264,7 @@ export default function GenerateScreen() {
       params: {
         sessionId,
         renderUrl,
+        renderUrls: JSON.stringify(renderUrls),
         photoUri: params.photoUri as string,
         draftId: params.draftId as string,
         box_x1: params.box_x1 as string,
@@ -273,6 +284,7 @@ export default function GenerateScreen() {
     setErrorMessage(null);
     setSessionId(null);
     setRenderUrl(null);
+    setRenderUrls([]);
     startPipeline();
   };
 

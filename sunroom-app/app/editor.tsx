@@ -1,12 +1,23 @@
 import { Colors } from "@/constants/Colors";
 import { router, useLocalSearchParams } from "expo-router";
-import { useState } from "react";
-import { Image, Pressable, Share, StyleSheet, Text, View } from "react-native";
+import { useMemo, useRef, useState } from "react";
+import {
+  Image,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  Pressable,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 
 export default function EditorScreen() {
   const {
     sessionId,
     renderUrl,
+    renderUrls,
     photoUri,
     draftId,
     box_x1,
@@ -18,23 +29,61 @@ export default function EditorScreen() {
   } = useLocalSearchParams<{
     sessionId: string;
     renderUrl: string;
+    renderUrls: string;
     photoUri: string;
     draftId: string;
     box_x1: string;
     box_y1: string;
     box_x2: string;
     box_y2: string;
-    totalPrice: string; // add
+    totalPrice: string;
     priceBreakdown: string;
   }>();
 
-  const [imageError, setImageError] = useState(false);
+  // The set of renders to choose from. Prefer the variations array; fall back to
+  // the single render_url so older flows keep working.
+  const urls = useMemo<string[]>(() => {
+    let list: string[] = [];
+    try {
+      const parsed = JSON.parse(renderUrls || "[]");
+      if (Array.isArray(parsed)) list = parsed.filter(Boolean);
+    } catch {
+      // ignore — fall through to single
+    }
+    if (list.length === 0 && renderUrl) list = [renderUrl];
+    return list;
+  }, [renderUrls, renderUrl]);
+
+  const isGallery = urls.length > 1;
+
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [failed, setFailed] = useState<Record<number, boolean>>({});
+  const [containerWidth, setContainerWidth] = useState(0);
+  const scrollRef = useRef<ScrollView>(null);
+
+  const selectedUrl = urls[selectedIndex] ?? renderUrl ?? null;
+
+  const markFailed = (i: number) =>
+    setFailed((prev) => (prev[i] ? prev : { ...prev, [i]: true }));
+
+  const selectIndex = (i: number) => {
+    setSelectedIndex(i);
+    if (containerWidth > 0) {
+      scrollRef.current?.scrollTo({ x: i * containerWidth, animated: true });
+    }
+  };
+
+  const onMomentumEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (containerWidth <= 0) return;
+    const idx = Math.round(e.nativeEvent.contentOffset.x / containerWidth);
+    if (idx !== selectedIndex) setSelectedIndex(idx);
+  };
 
   const handleShare = async () => {
     try {
       await Share.share({
-        message: `Check out this sunroom design! View it here: ${renderUrl}`,
-        url: renderUrl,
+        message: `Check out this sunroom design! View it here: ${selectedUrl}`,
+        url: selectedUrl ?? undefined,
       });
     } catch (e) {
       // Share sheet dismissed or failed — no alert needed
@@ -46,17 +95,15 @@ export default function EditorScreen() {
       pathname: "/quote",
       params: {
         sessionId,
-        renderUrl,
+        renderUrl: selectedUrl ?? "",
         photoUri,
-        totalPrice, // add
-        priceBreakdown, // add
+        totalPrice,
+        priceBreakdown,
       },
     });
   };
 
   const handleReconfigure = () => {
-    // Navigate back to configure, reloading the draft that was auto-saved
-    // before generation so all options are pre-filled
     router.replace({
       pathname: "/configure",
       params: {
@@ -74,35 +121,65 @@ export default function EditorScreen() {
     router.dismissAll();
   };
 
-  return (
-    <View style={styles.container}>
-      <View style={styles.imageContainer}>
-        {renderUrl && !imageError ? (
+  // A single render filling the available area, with graceful fallback.
+  const renderImageAt = (i: number, width?: number) => {
+    const url = urls[i];
+    if (url && !failed[i]) {
+      return (
+        <Image
+          source={{ uri: url }}
+          style={width != null ? { width, height: "100%" } : styles.renderImage}
+          resizeMode="contain"
+          onError={() => markFailed(i)}
+        />
+      );
+    }
+    return (
+      <View style={[styles.imageFallback, width != null ? { width } : null]}>
+        {photoUri ? (
           <Image
-            source={{ uri: renderUrl }}
+            source={{ uri: photoUri }}
             style={styles.renderImage}
             resizeMode="contain"
-            onError={() => setImageError(true)}
           />
         ) : (
-          <View style={styles.imageFallback}>
-            {photoUri ? (
-              <Image
-                source={{ uri: photoUri }}
-                style={styles.renderImage}
-                resizeMode="contain"
-              />
-            ) : (
-              <Text style={styles.fallbackText}>Render not available</Text>
-            )}
-            {imageError && (
-              <View style={styles.errorBanner}>
-                <Text style={styles.errorBannerText}>
-                  Render image could not be loaded. Showing original photo.
-                </Text>
+          <Text style={styles.fallbackText}>Render not available</Text>
+        )}
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorBannerText}>
+            This render could not be loaded.
+          </Text>
+        </View>
+      </View>
+    );
+  };
+
+  return (
+    <View style={styles.container}>
+      <View
+        style={styles.imageContainer}
+        onLayout={(e) => setContainerWidth(e.nativeEvent.layout.width)}
+      >
+        {isGallery ? (
+          <ScrollView
+            ref={scrollRef}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onMomentumScrollEnd={onMomentumEnd}
+            style={styles.swiper}
+          >
+            {urls.map((_, i) => (
+              <View
+                key={i}
+                style={{ width: containerWidth || undefined, height: "100%" }}
+              >
+                {renderImageAt(i, containerWidth || undefined)}
               </View>
-            )}
-          </View>
+            ))}
+          </ScrollView>
+        ) : (
+          renderImageAt(0)
         )}
 
         <Pressable style={styles.backButton} onPress={() => router.back()}>
@@ -112,13 +189,69 @@ export default function EditorScreen() {
         <View style={styles.renderBadge}>
           <Text style={styles.renderBadgeText}>AI Generated Design</Text>
         </View>
+
+        {isGallery && (
+          <>
+            <View style={styles.counter}>
+              <Text style={styles.counterText}>
+                {selectedIndex + 1} / {urls.length}
+              </Text>
+            </View>
+            <View style={styles.dots}>
+              {urls.map((_, i) => (
+                <View
+                  key={i}
+                  style={[styles.dot, i === selectedIndex && styles.dotActive]}
+                />
+              ))}
+            </View>
+          </>
+        )}
       </View>
+
+      {isGallery && (
+        <View style={styles.filmstrip}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.filmstripContent}
+          >
+            {urls.map((url, i) => (
+              <Pressable
+                key={i}
+                onPress={() => selectIndex(i)}
+                style={[
+                  styles.thumb,
+                  i === selectedIndex && styles.thumbSelected,
+                ]}
+              >
+                {url && !failed[i] ? (
+                  <Image
+                    source={{ uri: url }}
+                    style={styles.thumbImage}
+                    resizeMode="cover"
+                    onError={() => markFailed(i)}
+                  />
+                ) : (
+                  <View style={styles.thumbFallback}>
+                    <Text style={styles.thumbFallbackText}>!</Text>
+                  </View>
+                )}
+                <View style={styles.thumbIndexBadge}>
+                  <Text style={styles.thumbIndexText}>{i + 1}</Text>
+                </View>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      )}
 
       <View style={styles.panel}>
         <Text style={styles.panelTitle}>Your Sunroom Design</Text>
         <Text style={styles.panelSubtitle}>
-          Review the design below. You can tweak the configuration, generate a
-          quote, or share with the customer.
+          {isGallery
+            ? "Swipe or tap a thumbnail to compare the AI variations. The one you're viewing is used for the quote and share."
+            : "Review the design below. You can tweak the configuration, generate a quote, or share with the customer."}
         </Text>
 
         <View style={styles.primaryActions}>
@@ -156,8 +289,14 @@ export default function EditorScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0a0a0a" },
   imageContainer: { flex: 1, position: "relative" },
+  swiper: { flex: 1 },
   renderImage: { width: "100%", height: "100%" },
-  imageFallback: { flex: 1, position: "relative" },
+  imageFallback: {
+    flex: 1,
+    position: "relative",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   fallbackText: {
     color: Colors.text.tertiary,
     fontSize: 14,
@@ -195,6 +334,69 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   renderBadgeText: { color: Colors.white, fontSize: 13, fontWeight: "600" },
+  counter: {
+    position: "absolute",
+    bottom: 16,
+    right: 16,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  counterText: { color: Colors.white, fontSize: 13, fontWeight: "700" },
+  dots: {
+    position: "absolute",
+    bottom: 20,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 6,
+  },
+  dot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "rgba(255,255,255,0.4)",
+  },
+  dotActive: { backgroundColor: Colors.white, width: 9, height: 9, borderRadius: 5 },
+  filmstrip: {
+    backgroundColor: "#111",
+    borderTopWidth: 0.5,
+    borderTopColor: Colors.border,
+  },
+  filmstripContent: { padding: 10, gap: 10 },
+  thumb: {
+    width: 72,
+    height: 72,
+    borderRadius: 10,
+    overflow: "hidden",
+    borderWidth: 2,
+    borderColor: "transparent",
+    backgroundColor: "#222",
+  },
+  thumbSelected: { borderColor: Colors.primary },
+  thumbImage: { width: "100%", height: "100%" },
+  thumbFallback: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#333",
+  },
+  thumbFallbackText: { color: Colors.text.tertiary, fontSize: 20, fontWeight: "700" },
+  thumbIndexBadge: {
+    position: "absolute",
+    top: 3,
+    left: 3,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  thumbIndexText: { color: Colors.white, fontSize: 11, fontWeight: "700" },
   panel: {
     backgroundColor: Colors.surface,
     padding: 20,

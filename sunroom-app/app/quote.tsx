@@ -133,6 +133,14 @@ export default function QuoteScreen() {
   const totalFormatted =
     parsedTotal > 0 ? `$${parsedTotal.toLocaleString()}` : "TBD";
 
+  // Financing — monthly estimates from the total (with discounts). Option 1 is
+  // deferred (no payment / no interest); options 2 & 3 use the lender's
+  // per-dollar payment factors. Keep these factors in sync with the PDF section.
+  const fmtMoney = (n: number) =>
+    n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const opt2Monthly = parsedTotal > 0 ? `$${fmtMoney(parsedTotal * 0.0198)}` : "—";
+  const opt3Monthly = parsedTotal > 0 ? `$${fmtMoney(parsedTotal * 0.0107)}` : "—";
+
   const notes = session?.notes || "";
   const widthFt = session?.width_ft;
   const depthFt = session?.depth_ft;
@@ -272,6 +280,16 @@ export default function QuoteScreen() {
     display: inline-block; background: #0A4A9F; color: #fff; border-radius: 20px;
     padding: 4px 14px; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; margin-top: 8px;
   }
+  .finance-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .finance-card { border: 1px solid #e5e7eb; border-top: 3px solid #0A4A9F; border-radius: 8px; padding: 13px 14px; }
+  .fin-term { font-size: 10px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: #0A4A9F; }
+  .fin-amt { font-size: 23px; font-weight: 800; color: #1b232e; margin: 7px 0; }
+  .fin-amt span { font-size: 11px; font-weight: 600; color: #6b7280; }
+  .fin-headline { font-size: 11px; font-weight: 600; color: #1b232e; line-height: 1.5; }
+  .fin-feats { list-style: none; }
+  .fin-feats li { font-size: 10.5px; color: #4b5563; padding-left: 13px; position: relative; line-height: 1.65; }
+  .fin-feats li:before { content: "\\2713"; position: absolute; left: 0; color: #0A4A9F; font-weight: 700; }
+  .fin-note { font-size: 9px; color: #9ca3af; line-height: 1.5; margin-bottom: 18px; }
 </style>
 </head>
 <body>
@@ -346,6 +364,33 @@ ${
        </div>`
     : ""
 }
+
+<div class="divider"></div>
+<div class="label" style="margin-bottom:12px">Financing Options</div>
+<div class="finance-grid">
+  <div class="finance-card">
+    <div class="fin-term">Option 1 &middot; 12 Months</div>
+    <div class="fin-amt">$0<span> /mo</span></div>
+    <div class="fin-headline">No Payments &amp; No Interest for 12 months</div>
+  </div>
+  <div class="finance-card">
+    <div class="fin-term">Option 2 &middot; 6.99% &middot; 5 Years</div>
+    <div class="fin-amt">${opt2Monthly}<span> /mo</span></div>
+    <ul class="fin-feats">
+      <li>Unsecured</li><li>No prepayment penalties</li>
+      <li>No closing costs</li><li>No fees</li>
+    </ul>
+  </div>
+  <div class="finance-card">
+    <div class="fin-term">Option 3 &middot; 9.99% &middot; 180 Months</div>
+    <div class="fin-amt">${opt3Monthly}<span> /mo</span></div>
+    <ul class="fin-feats">
+      <li>Unsecured</li><li>No prepayment penalties</li>
+      <li>No closing costs</li><li>No fees</li>
+    </ul>
+  </div>
+</div>
+<div class="fin-note">Estimated monthly payments are based on the total investment with discounts and are subject to credit approval. Financing provided by a third party; actual payment may vary.</div>
 
 <div class="footer">
   This proposal is an estimate based on the selected configuration and is subject to site inspection.<br/>
@@ -600,6 +645,54 @@ ${
           </>
         ) : null}
 
+        {/* Financing */}
+        <View style={styles.divider} />
+        <Text style={styles.sectionLabel}>FINANCING OPTIONS</Text>
+        <View style={styles.financeGrid}>
+          <View style={styles.financeCard}>
+            <Text style={styles.finTerm}>OPTION 1 · 12 MONTHS</Text>
+            <Text style={styles.finAmt}>
+              $0<Text style={styles.finAmtUnit}> /mo</Text>
+            </Text>
+            <Text style={styles.finHeadline}>
+              No Payments & No Interest for 12 months
+            </Text>
+          </View>
+          <View style={styles.financeCard}>
+            <Text style={styles.finTerm}>OPTION 2 · 6.99% · 5 YEARS</Text>
+            <Text style={styles.finAmt}>
+              {opt2Monthly}
+              <Text style={styles.finAmtUnit}> /mo</Text>
+            </Text>
+            {["Unsecured", "No prepayment penalties", "No closing costs", "No fees"].map(
+              (f) => (
+                <Text key={f} style={styles.finFeat}>
+                  ✓ {f}
+                </Text>
+              ),
+            )}
+          </View>
+          <View style={styles.financeCard}>
+            <Text style={styles.finTerm}>OPTION 3 · 9.99% · 180 MONTHS</Text>
+            <Text style={styles.finAmt}>
+              {opt3Monthly}
+              <Text style={styles.finAmtUnit}> /mo</Text>
+            </Text>
+            {["Unsecured", "No prepayment penalties", "No closing costs", "No fees"].map(
+              (f) => (
+                <Text key={f} style={styles.finFeat}>
+                  ✓ {f}
+                </Text>
+              ),
+            )}
+          </View>
+        </View>
+        <Text style={styles.finNote}>
+          Estimated monthly payments are based on the total investment with
+          discounts and are subject to credit approval. Financing provided by a
+          third party; actual payment may vary.
+        </Text>
+
         {/* Validity */}
         <View style={styles.validityBadge}>
           <Text style={styles.validityText}>Valid for 30 days · {today}</Text>
@@ -695,6 +788,45 @@ const styles = StyleSheet.create({
 
   twoCol: { flexDirection: "row", gap: 20, marginBottom: 20 },
   halfCol: { flex: 1, gap: 6 },
+
+  financeGrid: { flexDirection: "row", gap: 10, marginTop: 4 },
+  financeCard: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderTopWidth: 3,
+    borderTopColor: Colors.primary,
+    borderRadius: 10,
+    padding: 12,
+    backgroundColor: Colors.white,
+  },
+  finTerm: {
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    color: Colors.primary,
+  },
+  finAmt: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: Colors.text.primary,
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  finAmtUnit: { fontSize: 11, fontWeight: "600", color: Colors.text.secondary },
+  finHeadline: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: Colors.text.primary,
+    lineHeight: 16,
+  },
+  finFeat: { fontSize: 11, color: Colors.text.secondary, lineHeight: 18 },
+  finNote: {
+    fontSize: 10,
+    color: Colors.text.tertiary,
+    lineHeight: 14,
+    marginTop: 10,
+  },
   sectionLabel: {
     fontSize: 11,
     fontWeight: "700",

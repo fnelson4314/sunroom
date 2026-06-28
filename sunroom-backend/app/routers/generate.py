@@ -89,19 +89,34 @@ def get_generation_status(session_id: str):
     validate_uuid(session_id)
 
     try:
-        result = supabase.table("configurations")\
-            .select("id, status, render_url")\
-            .eq("id", session_id)\
-            .execute()
+        # Try to include render_urls (parallel variations); fall back gracefully
+        # if the column hasn't been migrated yet.
+        try:
+            result = supabase.table("configurations")\
+                .select("id, status, render_url, render_urls")\
+                .eq("id", session_id)\
+                .execute()
+        except Exception:
+            result = supabase.table("configurations")\
+                .select("id, status, render_url")\
+                .eq("id", session_id)\
+                .execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Session not found")
 
         session = result.data[0]
+        # Always hand back a list: the migrated array if present, else the single
+        # render_url wrapped, else empty. The frontend renders whatever it gets.
+        render_urls = session.get("render_urls")
+        if not render_urls:
+            single = session.get("render_url")
+            render_urls = [single] if single else []
         return {
             "session_id": session["id"],
             "status": session["status"],
             "render_url": session.get("render_url"),
+            "render_urls": render_urls,
         }
 
     except HTTPException:

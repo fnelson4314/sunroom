@@ -15,10 +15,18 @@ def quality_prefix(frame_color: str) -> str:
     color = (frame_color or "white").strip().lower()
     return (
         f"SUNRM, photorealistic exterior photo of a {color} aluminum-framed "
-        f"sunroom with glass walls attached to the house, "
+        f"sunroom with large glass walls of clear tinted reflective glass "
+        f"that mirror the bright blue sky, light and airy glass with bright sky "
+        f"reflections, attached to the house, "
     )
 
-QUALITY_SUFFIX = "natural daylight, consistent shadows"
+# Affirmative realism cues only (the model ignores the negative prompt, so the
+# anti-cartoon guards have to live here as positive descriptors). Deliberately no
+# negation words like "not a render" — FLUX latches onto the noun, not the "not".
+QUALITY_SUFFIX = (
+    "natural daylight, consistent soft shadows, realistic muted colors, "
+    "true-to-life architectural photograph, high detail, sharp focus"
+)
 
 NEGATIVE_PROMPT = (
     "glass roof, transparent roof, polycarbonate roof, glass ceiling, greenhouse roof, "
@@ -273,11 +281,21 @@ def build_prompt(
         }
         roof_fragment = roof_fragments.get(roof_style, "dark asphalt shingled roof matching the existing house roof, opaque, not white")
 
-        # Transom enforcement — if wall_data mentions transom, force it
-        has_transom  = "transom"  in wall_data.lower() if wall_data else False
-        has_kneewall = "kneewall" in wall_data.lower() if wall_data else False
-        transom_fragment  = "narrow glass transom band at top of each panel, " if has_transom else ""
-        kneewall_fragment = "solid aluminum kneewall panels at base, knee-height solid wall below glass, " if has_kneewall else ""
+        # Transom APPEARANCE constraint — NOT enforcement.
+        # The per-unit wall_description already states exactly which units carry a
+        # transom. The old code injected "transom band at top of EACH panel"
+        # whenever ANY unit had one, which made the model add transoms everywhere
+        # (symptom: transom where it shouldn't be). Here we only constrain how the
+        # already-placed transoms LOOK — a single continuous band — which also
+        # fights the model/LoRA tendency to split them. Kneewalls: no global
+        # fragment at all; the per-unit description covers them precisely.
+        has_transom = "transom" in wall_data.lower() if wall_data else False
+        transom_fragment = (
+            "any transom is a single continuous horizontal glass band spanning the "
+            "full width of its panel, not divided, not split into sections, "
+            if has_transom else ""
+        )
+        kneewall_fragment = ""
 
         # Keywords that conflict with opaque roof enforcement — exclude these fragments
         ROOF_CONFLICT_KEYWORDS = [
@@ -288,6 +306,14 @@ def build_prompt(
             "all-season vinyl", "convertible screen",
             "SUNRM",  # already in prefix, skip duplicates from DB
         ]
+
+        # The per-unit wall_description is the SINGLE source of truth for transoms
+        # and kneewalls (which panels have them + their material). Some DB option
+        # fragments (e.g. a "Transom Glass" upgrade whose fragment reads "transom
+        # glass windows above main panels, upper glass transom band") describe them
+        # GLOBALLY, which forces a transom onto EVERY panel — the real cause of
+        # "transom where it shouldn't be". Drop any fragment that mentions them.
+        STRUCTURE_REDUNDANT_KEYWORDS = ["transom", "kneewall", "knee wall", "knee-wall"]
 
         fragments = []
         if selected_option_ids:
@@ -306,6 +332,10 @@ def build_prompt(
                 # Skip fragments that conflict with opaque roof
                 if any(kw.lower() in frag.lower() for kw in ROOF_CONFLICT_KEYWORDS):
                     logger.info(f"Skipping conflicting fragment: {frag[:60]}")
+                    continue
+                # Skip transom/kneewall fragments — handled per-unit, never global
+                if any(kw in frag.lower() for kw in STRUCTURE_REDUNDANT_KEYWORDS):
+                    logger.info(f"Skipping per-unit structure fragment: {frag[:60]}")
                     continue
                 fragments.append(frag)
 
