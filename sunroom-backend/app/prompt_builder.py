@@ -255,6 +255,8 @@ def build_prompt(
     roof_style: str = "",
     wall_system: str = "",
     wall_color: str = "white",
+    under_existing_shape: str = None,
+    include_gable_wings: bool = True,
 ) -> tuple[str, str]:
     """
     Build (positive_prompt, negative_prompt) for the AI repaint step.
@@ -276,10 +278,35 @@ def build_prompt(
         roof_fragments = {
             "gable": "peaked gable roof covered in dark gray-black matte asphalt shingles that exactly match the existing house roof in color and texture, opaque solid shingled roof, matte and non-reflective, NOT a white roof, NOT a light roof, NOT a reflective or glossy roof, NOT a roof reflecting the sky, NOT a metal roof, NOT a glass roof",
             "studio":         "single-slope roof covered in dark asphalt shingles matching the existing house roof in color and texture, opaque solid shingled roof, NOT a white, light, metal, or glass roof",
-            "under_existing": "roof tucked under the existing house roof, opaque dark shingled ceiling matching the house",
+            "under_existing": "glass sunroom walls installed underneath the existing house roof, the existing roof stays unchanged above, no new roof added, the wall tops meet a white aluminum header beam just below the existing eaves",
             "roof_only":      "freestanding patio roof covered in dark asphalt shingles matching the existing house roof, opaque, NOT a white or metal roof",
         }
         roof_fragment = roof_fragments.get(roof_style, "dark asphalt shingled roof matching the existing house roof, opaque, not white")
+
+        # Under-existing: fold in the EXISTING roof's shape so the prompt is
+        # consistent with the preserved roof in the photo (gable peak vs studio slope).
+        if roof_style == "under_existing" and under_existing_shape in ("gable", "studio"):
+            shape_word = "gable" if under_existing_shape == "gable" else "single-slope studio"
+            beam_color = (wall_color or "white").strip().lower()
+            if include_gable_wings:
+                # Adding a NEW gable/wing infill (glass or solid) up to the roof.
+                roof_fragment = (
+                    f"glass sunroom walls installed underneath the existing {shape_word} "
+                    "house roof, the existing roof stays unchanged above, no new roof added, "
+                    f"the wall tops meet a {beam_color} aluminum header beam just below the "
+                    "existing eaves, with a new glass gable/wing infill filling the area "
+                    "between the header beam and the existing roof"
+                )
+            else:
+                # Walls only — the existing gable/end wall above is KEPT. No new
+                # gable/wing infill; the walls simply run up to the existing header.
+                roof_fragment = (
+                    f"glass sunroom walls installed underneath the existing {shape_word} "
+                    "house roof, the existing roof AND its existing gable end wall stay "
+                    "completely unchanged above, no new roof and no new gable infill added, "
+                    f"the glass walls run straight up to meet a {beam_color} aluminum header "
+                    "beam just below the existing eaves"
+                )
 
         # Transom APPEARANCE constraint — NOT enforcement.
         # The per-unit wall_description already states exactly which units carry a

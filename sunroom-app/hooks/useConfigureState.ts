@@ -86,6 +86,12 @@ export type ConfigureState = {
   selectedProductLine: ProductLine | null;
   roofStyle: "studio" | "gable" | "under_existing" | "roof_only" | null;
   roofOnlySubStyle: "gable" | "studio" | null;
+  // Under-existing: the shape of the EXISTING roof the walls go beneath.
+  underExistingShape: "gable" | "studio" | null;
+  // Under-existing: whether to ADD a new gable/wing infill (glass or solid) above
+  // the header (true), or run the walls up to the EXISTING gable that's kept in
+  // place ("walls only", false — e.g. screen-room conversions). Default true.
+  includeGableWings: boolean;
   roofOnlyWidthIn: string; // width in inches — ceil to ft for pricing, no overhang
   roofOnlyDepthIn: string; // depth in inches — ceil to ft for pricing, no overhang
   roofOnlyWallHeightIn: string; // wall height in inches for roof_only
@@ -235,6 +241,8 @@ const initialState: ConfigureState = {
   selectedProductLine: null,
   roofStyle: null,
   roofOnlySubStyle: null,
+  underExistingShape: null,
+  includeGableWings: true,
   roofOnlyWidthIn: "",
   roofOnlyDepthIn: "",
   roofOnlyWallHeightIn: "",
@@ -323,6 +331,41 @@ export function useConfigureState() {
 
   const setRoofOnlySubStyle = (sub: "gable" | "studio") =>
     setState((prev) => ({ ...prev, roofOnlySubStyle: sub }));
+
+  const setUnderExistingShape = (shape: "gable" | "studio") =>
+    setState((prev) => ({ ...prev, underExistingShape: shape }));
+
+  // Under-existing only: toggle whether a new gable/wing infill is added above the
+  // header. Turning it OFF ("walls only") drops any gable/wing glass selection and
+  // its priced add-on from every wall, so nothing gable/wing is rendered or charged.
+  // Turning it back ON just flips the flag — WallBuilder re-initializes a default
+  // gable/wing glass config for eligible walls.
+  const setIncludeGableWings = (value: boolean, allOptions: Option[]) =>
+    setState((prev) => {
+      if (value) return { ...prev, includeGableWings: true };
+
+      const gableOptIds = [
+        allOptions.find((o) => o.name.includes("Gable or Wing Glass Uninsulated")),
+        allOptions.find((o) => o.name.includes("Gable or Wing Glass Comfort")),
+        allOptions.find((o) => o.name.includes("Solid Wing Panel")),
+      ]
+        .filter((o): o is Option => !!o)
+        .map((o) => o.id);
+
+      const wallAddOns: Record<string, Record<string, string>> = {};
+      Object.entries(prev.wallAddOns).forEach(([wallId, opts]) => {
+        const next = { ...opts };
+        gableOptIds.forEach((id) => delete next[id]);
+        wallAddOns[wallId] = next;
+      });
+
+      return {
+        ...prev,
+        includeGableWings: false,
+        walls: prev.walls.map((w) => ({ ...w, gableGlass: null })),
+        wallAddOns,
+      };
+    });
 
   const setRoofOnlyWidthIn = (val: string) =>
     setState((prev) => ({ ...prev, roofOnlyWidthIn: val }));
@@ -1415,6 +1458,9 @@ export function useConfigureState() {
       roofAddOns: JSON.stringify(state.roofAddOns),
       roofStyle: effectiveRoofStyle,
       roofOnlySubStyle: state.roofOnlySubStyle,
+      underExistingShape: state.underExistingShape,
+      // Stringified for the router; generate.tsx converts back to a bool.
+      includeGableWings: String(state.includeGableWings),
       mountHeight: state.mountHeight,
       roofColorNote: state.roofColorNote,
       wallColor: state.wallColor,
@@ -1448,6 +1494,8 @@ export function useConfigureState() {
     buildPriceBreakdown,
     setRoofStyle,
     setRoofOnlySubStyle,
+    setUnderExistingShape,
+    setIncludeGableWings,
     setRoofOnlyWidthIn,
     setRoofOnlyDepthIn,
     setRoofOnlyWallHeightIn,

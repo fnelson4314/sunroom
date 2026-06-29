@@ -69,6 +69,8 @@ export default function GenerateScreen() {
     mountHeight: string;
     projectionDistance: string;
     roofOnlySubStyle: string;
+    underExistingShape: string;
+    includeGableWings: string;
     customerName: string;
     customerEmail: string;
     notes: string;
@@ -188,6 +190,8 @@ export default function GenerateScreen() {
             mount_height: params.mountHeight || "",
             projection_distance: params.projectionDistance || "",
             roof_only_sub_style: params.roofOnlySubStyle || null,
+            under_existing_shape: params.underExistingShape || null,
+            include_gable_wings: params.includeGableWings !== "false",
             wall_corners: params.wall_corners || "",
           },
           null,
@@ -209,6 +213,8 @@ export default function GenerateScreen() {
         mount_height: params.mountHeight || "",
         projection_distance: params.projectionDistance || "",
         roof_only_sub_style: params.roofOnlySubStyle || null,
+        under_existing_shape: params.underExistingShape || null,
+        include_gable_wings: params.includeGableWings !== "false",
         wall_corners: params.wall_corners || "",
       });
 

@@ -28,7 +28,11 @@ type PlacedPoint = { x: number; y: number };
 // 1-wall and 3-wall: 4 points (rectangle)
 
 function getPointCount(wallCount: WallCount): number {
-  return wallCount === 2 ? 5 : 4;
+  // 2- AND 3-wall use the angled 5-point capture (front + near side). At any
+  // angle you can only see two walls, so we capture/render the two visible ones;
+  // a 3rd wall is config/pricing-only (the hidden far return). Only 1-wall (a
+  // recessed nook) is captured as a flat 4-point rectangle.
+  return wallCount === 1 ? 4 : 5;
 }
 
 // ─── Labels ───────────────────────────────────────────────────────────────────
@@ -42,15 +46,7 @@ function getPointLabels(wallCount: WallCount, wallCombo: WallCombo): string[] {
       "Nook — Bottom Left",
     ];
   }
-  if (wallCount === 3) {
-    return [
-      "House Wall — Top Left",
-      "House Wall — Top Right",
-      "House Wall — Bottom Right",
-      "House Wall — Bottom Left",
-    ];
-  }
-  // 2 walls — 5 points
+  // 2- and 3-wall both use the angled 5-point L (front + the visible side).
   if (wallCombo === "AB") {
     return [
       "Left wall — Top (house)",
@@ -86,11 +82,9 @@ function buildWallCorners(
     return { B: [p(0), p(1), p(2), p(3)] };
   }
 
-  if (wallCount === 3) {
-    return { _flat_wall: [p(0), p(1), p(2), p(3)] };
-  }
-
-  // 2-wall: pass all 5 points — renderer uses them for perspective placement
+  // 2- and 3-wall: pass all 5 points — renderer uses them for perspective
+  // placement and draws the two visible walls (front + near side). A 3rd wall is
+  // priced/built via the configurator but never rendered (it's off-camera).
   // pt0=left-top, pt1=right-top, pt2=right-bottom, pt3=left-bottom, pt4=front-corner-ground
   return {
     _5pt: [p(0), p(1), p(2), p(3), p(4)],
@@ -110,7 +104,7 @@ function GuideLines({
 
   let pairs: [number, number][] = [];
 
-  if (wallCount === 1 || wallCount === 3) {
+  if (wallCount === 1) {
     pairs = [
       [0, 1],
       [1, 2],
@@ -167,6 +161,67 @@ function GuideLines({
   );
 }
 
+// ─── Roofline trace (under-existing) ───────────────────────────────────────────
+// Draws the traced existing-roof underside as an orange polyline from the left
+// top point (pt0) through the intermediate trace taps to the right top point (pt1),
+// plus a dot on each intermediate tap.
+
+function RoofTraceLines({
+  top0,
+  top1,
+  trace,
+}: {
+  top0?: PlacedPoint;
+  top1?: PlacedPoint;
+  trace: PlacedPoint[];
+}) {
+  if (!top0 || !top1) return null;
+  const chain = [top0, ...trace, top1];
+  return (
+    <>
+      {chain.slice(1).map((pb, i) => {
+        const pa = chain[i];
+        const dx = pb.x - pa.x;
+        const dy = pb.y - pa.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+        const cx = (pa.x + pb.x) / 2;
+        const cy = (pa.y + pb.y) / 2;
+        return (
+          <View
+            key={`rl${i}`}
+            style={{
+              position: "absolute",
+              left: cx - len / 2,
+              top: cy - 1.5,
+              width: len,
+              height: 3,
+              backgroundColor: "rgba(255,130,0,0.95)",
+              transform: [{ rotate: `${angle}deg` }],
+            }}
+          />
+        );
+      })}
+      {trace.map((pt, i) => (
+        <View
+          key={`rt${i}`}
+          style={{
+            position: "absolute",
+            left: pt.x - 8,
+            top: pt.y - 8,
+            width: 16,
+            height: 16,
+            borderRadius: 8,
+            backgroundColor: "#ff8200",
+            borderWidth: 2,
+            borderColor: "#fff",
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
 // ─── Instruction ──────────────────────────────────────────────────────────────
 
 function getInstruction(
@@ -201,6 +256,25 @@ export default function CameraScreen() {
   );
   const cameraRef = useRef<CameraView>(null);
 
+  // Build type: "new_roof" = today's flow (renderer builds a roof). "under_existing"
+  // = walls go under the EXISTING roof, so after the 5 points we also trace the
+  // existing roof's underside (roofTrace) → passed to the renderer as _roofline.
+  const [buildType, setBuildType] = useState<"new_roof" | "under_existing">(
+    "new_roof",
+  );
+  const [roofTrace, setRoofTrace] = useState<PlacedPoint[]>([]);
+  const [traceComplete, setTraceComplete] = useState(false);
+  // Under-existing only: the shape of the EXISTING roof we're building beneath.
+  // Drives the trace guidance (gable = trace up to a peak; studio = one slope)
+  // and flows to the configurator/prompt.
+  const [existingRoof, setExistingRoof] = useState<"studio" | "gable">("studio");
+
+  const resetCapture = () => {
+    setPoints([]);
+    setRoofTrace([]);
+    setTraceComplete(false);
+  };
+
   useEffect(() => {
     getFullCatalog().catch(() => {});
   }, []);
@@ -223,6 +297,11 @@ export default function CameraScreen() {
 
   const totalPoints = getPointCount(wallCount);
   const allPlaced = points.length >= totalPoints;
+  const isUnderExisting = buildType === "under_existing";
+  // After the 5 points are placed, under-existing enters the roofline-trace phase
+  // until the user taps "Done Tracing".
+  const inTracePhase = isUnderExisting && allPlaced && !traceComplete;
+  const readyToConfirm = allPlaced && (!isUnderExisting || traceComplete);
 
   if (!permission) return <View style={styles.container} />;
   if (!permission.granted) {
@@ -246,7 +325,7 @@ export default function CameraScreen() {
       if (photo) {
         setPhotoUri(photo.uri);
         setMode("review");
-        setPoints([]);
+        resetCapture();
       }
     } catch (e) {
       console.error("Failed to take photo:", e);
@@ -263,7 +342,7 @@ export default function CameraScreen() {
       if (!result.canceled && result.assets[0]) {
         setPhotoUri(result.assets[0].uri);
         setMode("review");
-        setPoints([]);
+        resetCapture();
       }
     } catch (e) {
       console.error("Failed to pick image:", e);
@@ -284,6 +363,14 @@ export default function CameraScreen() {
     const screenH = overlaySize?.h ?? window.innerHeight;
 
     const wallCorners = buildWallCorners(points, wallCount, wallCombo);
+
+    // Under-existing: the existing roof's underside, traced left→right. Endpoints
+    // are the two top points (pt0, pt1); roofTrace holds the intermediate taps
+    // (e.g. the front-corner top). The renderer clips the walls to this line.
+    if (isUnderExisting && points.length >= 2) {
+      const chain = [points[0], ...roofTrace, points[1]];
+      wallCorners._roofline = chain.map((p) => [p.x, p.y]);
+    }
 
     const photoAspect = photoSize
       ? photoSize.w / photoSize.h
@@ -369,6 +456,8 @@ export default function CameraScreen() {
         wall_corners: JSON.stringify(normalizedCorners),
         preset_wall_count: String(wallCount),
         preset_wall_combo: wallCombo ?? "",
+        preset_roof_style: isUnderExisting ? "under_existing" : "",
+        preset_existing_roof: isUnderExisting ? existingRoof : "",
       },
     });
   };
@@ -398,7 +487,7 @@ export default function CameraScreen() {
               ]}
               onPress={() => {
                 setWallCount(n);
-                setWallCombo(n === 2 ? "BC" : null);
+                setWallCombo(n === 1 ? null : "BC");
               }}
             >
               <Text
@@ -411,7 +500,7 @@ export default function CameraScreen() {
               </Text>
             </TouchableOpacity>
           ))}
-          {wallCount === 2 && (
+          {(wallCount === 2 || wallCount === 3) && (
             <>
               <View style={styles.wallCountDivider} />
               {(["AB", "BC"] as WallCombo[]).map((combo) => (
@@ -438,12 +527,67 @@ export default function CameraScreen() {
         </View>
 
         <View style={styles.cameraFooter}>
+          <View style={styles.buildTypeRow}>
+            {(
+              [
+                ["new_roof", "New Roof"],
+                ["under_existing", "Under Existing"],
+              ] as const
+            ).map(([bt, label]) => (
+              <TouchableOpacity
+                key={bt}
+                style={[
+                  styles.buildTypeBtn,
+                  buildType === bt && styles.buildTypeBtnActive,
+                ]}
+                onPress={() => setBuildType(bt)}
+              >
+                <Text
+                  style={[
+                    styles.buildTypeBtnText,
+                    buildType === bt && styles.buildTypeBtnTextActive,
+                  ]}
+                >
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {isUnderExisting && (
+            <View style={styles.existingRoofRow}>
+              <Text style={styles.existingRoofLabel}>Existing roof:</Text>
+              {(
+                [
+                  ["studio", "Studio"],
+                  ["gable", "Gable"],
+                ] as const
+              ).map(([rt, label]) => (
+                <TouchableOpacity
+                  key={rt}
+                  style={[
+                    styles.subTypeBtn,
+                    existingRoof === rt && styles.buildTypeBtnActive,
+                  ]}
+                  onPress={() => setExistingRoof(rt)}
+                >
+                  <Text
+                    style={[
+                      styles.subTypeBtnText,
+                      existingRoof === rt && styles.buildTypeBtnTextActive,
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
           <Text style={styles.hint}>
-            {wallCount === 1
+            {isUnderExisting
+              ? "Under-Existing: capture the patio, then trace the existing roof edge"
+              : wallCount === 1
               ? "Position the U-shaped nook in frame"
-              : wallCount === 3
-                ? "Position the flat house wall in frame"
-                : "Position the house wall and patio area in frame"}
+              : "Position the house wall and patio area in frame (front + one side)"}
           </Text>
           <View style={styles.captureRow}>
             <Pressable style={styles.uploadButton} onPress={pickFromLibrary}>
@@ -485,6 +629,19 @@ export default function CameraScreen() {
           onStartShouldSetResponder={() => true}
           onResponderGrant={(evt) => {
           const { locationX, locationY } = evt.nativeEvent;
+          // Roofline-trace phase (under-existing): taps build the roof trace.
+          if (inTracePhase) {
+            const nearT = roofTrace.findIndex(
+              (p) => Math.hypot(p.x - locationX, p.y - locationY) < POINT_RADIUS,
+            );
+            if (nearT !== -1) {
+              setRoofTrace((prev) => prev.slice(0, nearT));
+              return;
+            }
+            setRoofTrace((prev) => [...prev, { x: locationX, y: locationY }]);
+            return;
+          }
+          if (traceComplete) return; // locked; use "Edit Trace" to reopen
           const nearIndex = points.findIndex((p) => {
             const dx = p.x - locationX,
               dy = p.y - locationY;
@@ -499,6 +656,14 @@ export default function CameraScreen() {
         }}
       >
         <GuideLines points={points} wallCount={wallCount} />
+
+        {isUnderExisting && allPlaced && (
+          <RoofTraceLines
+            top0={points[0]}
+            top1={points[1]}
+            trace={roofTrace}
+          />
+        )}
 
         {points.map((pt, i) => (
           <View
@@ -524,17 +689,37 @@ export default function CameraScreen() {
 
       <View style={styles.instructionBanner}>
         <Text style={styles.instructionText}>
-          {getInstruction(wallCount, wallCombo, points.length)}
+          {inTracePhase
+            ? `Trace the existing roof edge — ${roofTrace.length} point${roofTrace.length === 1 ? "" : "s"} added`
+            : traceComplete
+              ? "Roofline traced — confirm when ready"
+              : getInstruction(wallCount, wallCombo, points.length)}
         </Text>
-        {wallCount === 2 && points.length === 0 && (
+        {inTracePhase && (
+          <Text style={styles.instructionSub}>
+            {existingRoof === "gable"
+              ? "Trace the existing roof underside from point 1 up to the peak and back down to point 2. Then tap “Done Tracing”."
+              : "Tap along the underside of the existing roof from point 1 to point 2 — include the front corner. Then tap “Done Tracing”."}
+          </Text>
+        )}
+        {isUnderExisting && !allPlaced && points.length === 0 && (
+          <Text style={styles.instructionSub}>
+            Under-Existing: first place the 4 corners + front corner, then you’ll
+            trace the existing roofline.
+          </Text>
+        )}
+        {!isUnderExisting && wallCount !== 1 && points.length === 0 && (
           <Text style={styles.instructionSub}>
             Points 1-4: tap the house wall corners. Point 5 (green): tap the
             ground where the sunroom front corner will be.
+            {wallCount === 3
+              ? " (3-wall: you'll capture the two visible walls; the 3rd is set in the configurator.)"
+              : ""}
           </Text>
         )}
-        {wallCount !== 2 && points.length === 0 && (
+        {!isUnderExisting && wallCount === 1 && points.length === 0 && (
           <Text style={styles.instructionSub}>
-            Trace the house wall corners where the sunroom will attach
+            Trace the nook corners where the sunroom will attach
           </Text>
         )}
         {points.length > 0 && !allPlaced && (
@@ -548,28 +733,49 @@ export default function CameraScreen() {
         <Pressable
           style={styles.secondaryButton}
           onPress={() => {
-            if (points.length > 0) setPoints([]);
-            else {
+            // Step back one phase at a time.
+            if (traceComplete) {
+              setTraceComplete(false);
+            } else if (roofTrace.length > 0) {
+              setRoofTrace((prev) => prev.slice(0, -1));
+            } else if (points.length > 0) {
+              resetCapture();
+            } else {
               setMode("camera");
               setPhotoUri(null);
             }
           }}
         >
           <Text style={styles.secondaryButtonText}>
-            {points.length > 0 ? "Clear" : "Retake"}
+            {traceComplete
+              ? "Edit Trace"
+              : roofTrace.length > 0
+                ? "Undo"
+                : points.length > 0
+                  ? "Clear"
+                  : "Retake"}
           </Text>
         </Pressable>
-        <Pressable
-          style={[styles.button, !allPlaced && styles.buttonDisabled]}
-          onPress={confirmPoints}
-          disabled={!allPlaced}
-        >
-          <Text style={styles.buttonText}>
-            {allPlaced
-              ? "Confirm →"
-              : `${points.length} / ${totalPoints} points`}
-          </Text>
-        </Pressable>
+        {inTracePhase ? (
+          <Pressable
+            style={styles.button}
+            onPress={() => setTraceComplete(true)}
+          >
+            <Text style={styles.buttonText}>Done Tracing →</Text>
+          </Pressable>
+        ) : (
+          <Pressable
+            style={[styles.button, !readyToConfirm && styles.buttonDisabled]}
+            onPress={confirmPoints}
+            disabled={!readyToConfirm}
+          >
+            <Text style={styles.buttonText}>
+              {readyToConfirm
+                ? "Confirm →"
+                : `${points.length} / ${totalPoints} points`}
+            </Text>
+          </Pressable>
+        )}
       </View>
     </View>
   );
@@ -648,6 +854,41 @@ const styles = StyleSheet.create({
   },
   wallCountBtnText: { color: "#fff", fontSize: 13, fontWeight: "600" },
   wallCountBtnTextActive: { color: "#fff" },
+  buildTypeRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 4,
+  },
+  buildTypeBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 22,
+    backgroundColor: "rgba(255,255,255,0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.35)",
+  },
+  buildTypeBtnActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  buildTypeBtnText: { color: "#fff", fontSize: 14, fontWeight: "700" },
+  buildTypeBtnTextActive: { color: "#fff" },
+  existingRoofRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 4,
+  },
+  existingRoofLabel: { color: "rgba(255,255,255,0.85)", fontSize: 13, fontWeight: "600" },
+  subTypeBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.3)",
+  },
+  subTypeBtnText: { color: "#fff", fontSize: 13, fontWeight: "600" },
   cameraFooter: {
     position: "absolute",
     bottom: 0,

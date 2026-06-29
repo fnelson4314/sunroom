@@ -243,7 +243,7 @@
         return g;
       }
 
-      function buildWall(wall, fc, roofStyle, shHex, isGable) {
+      function buildWall(wall, fc, roofStyle, shHex, isGable, includeGableWings = true) {
         const g = new THREE.Group();
         const fw = wall.frame_width_in / 12,
           wallW = wall.width_in / 12,
@@ -271,6 +271,38 @@
         g.add(frameBorder(wallW, wallH, 0.12, fw, fmat));
         if (isGable && roofStyle === "gable")
           g.add(buildGable(wallW, wallH, fw, shHex, wall.gable_glass, fc, dividers));
+
+        // Under-existing: wall panels rise to the eave (wallH = the header). Above
+        // that, the area up to the EXISTING roof is filled — drawn tall and clipped
+        // to the traced roofline in post. Two flavors driven by includeGableWings:
+        //   true  → a DISTINCT gable/wing accent (glass or solid per gable-glass
+        //           config) sitting above a header beam — for roof-only/open
+        //           existing structures where we ADD a new gable/wing.
+        //   false → "walls only": the existing gable/end wall above is KEPT (it
+        //           shows through from the photo above the roofline), so the new
+        //           wall is just a plain glass continuation up to the existing
+        //           header — no accent, no intermediate transom beam, so it reads
+        //           as the wall meeting the header directly (e.g. screen-room
+        //           conversions where the solid gable stays).
+        if (roofStyle === "under_existing") {
+          const Df = 0.07;
+          const fillH = wallH; // overshoot above the header; clipped to the roofline
+          if (includeGableWings) {
+            const gg = wall.gable_glass;
+            const isSolid = !!gg && gg.glassType === "solid";
+            const fillMat = isSolid ? solidMat(0xdcd0be) : glassMat(0x2b4754, 0.8);
+            g.add(box(wallW - fw * 2, fillH, Df, fillMat, wallW / 2, wallH + fillH / 2, 0));
+            // Header beam at the eave (separates the wall panels from the accent above).
+            g.add(box(wallW, fw * 1.4, Df * 2, fmat, wallW / 2, wallH, 0.02));
+          } else {
+            // Walls-only: seamless glass continuation, no accent, no header beam here.
+            g.add(box(wallW - fw * 2, fillH, Df, glassMat(0x2b4754, 0.8), wallW / 2, wallH + fillH / 2, 0));
+          }
+          // Posts continue up through the fill, aligned to the unit dividers.
+          for (const dx of dividers) {
+            g.add(box(postW, fillH, Df * 1.1, fmat, dx, wallH + fillH / 2, 0.04));
+          }
+        }
         return g;
       }
 
@@ -535,6 +567,87 @@
         return tex;
       }
 
+      // ── Under-existing post-pass ────────────────────────────────────────────
+      // There is no NEW roof for under-existing rooms — the walls rise to the
+      // EXISTING house roof. The renderer builds the walls tall (overshooting),
+      // then this clips everything ABOVE the traced roofline back to the original
+      // photo (so the existing roof shows through) and lays a header beam along
+      // the line. Returns updated { composite, mask } data URLs.
+      // roofline = normalized [[x,y], ...] left->right; ends = back-top corners.
+      async function applyUnderExisting(
+        compositeURL, maskURL, photoDataUrl, roofline, photoW, photoH, frameHex,
+      ) {
+        const pts = roofline.map(([x, y]) => [x * photoW, y * photoH]);
+
+        // Region from the top of the image DOWN to the polyline (flat-extrapolated
+        // beyond the endpoints) — everything here is above the roofline.
+        const abovePath = (ctx) => {
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(photoW, 0);
+          ctx.lineTo(photoW, pts[pts.length - 1][1]);
+          for (let i = pts.length - 1; i >= 0; i--) ctx.lineTo(pts[i][0], pts[i][1]);
+          ctx.lineTo(0, pts[0][1]);
+          ctx.closePath();
+        };
+        const strokeHeader = (ctx, color) => {
+          ctx.beginPath();
+          ctx.moveTo(pts[0][0], pts[0][1]);
+          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+          ctx.lineWidth = Math.max(6, Math.round(photoH * 0.014));
+          ctx.lineCap = "round";
+          ctx.lineJoin = "round";
+          ctx.strokeStyle = color;
+          ctx.stroke();
+        };
+        const loadImg = (src) =>
+          new Promise((res, rej) => {
+            const im = new Image();
+            im.onload = () => res(im);
+            im.onerror = rej;
+            im.src = src;
+          });
+
+        const [compImg, photoImg, maskImg] = await Promise.all([
+          loadImg(compositeURL),
+          loadImg(photoDataUrl),
+          loadImg(maskURL),
+        ]);
+
+        // Composite: cover anything above the roofline with the original photo
+        // (the existing roof), then draw the header beam in the frame colour.
+        const cc = document.createElement("canvas");
+        cc.width = photoW;
+        cc.height = photoH;
+        const cx = cc.getContext("2d");
+        cx.drawImage(compImg, 0, 0, photoW, photoH);
+        cx.save();
+        abovePath(cx);
+        cx.clip();
+        cx.drawImage(photoImg, 0, 0, photoW, photoH);
+        cx.restore();
+        strokeHeader(cx, "#" + (frameHex >>> 0).toString(16).padStart(6, "0"));
+        const composite = cc.toDataURL("image/jpeg", 0.95);
+
+        // Mask: black out above the roofline; header beam is white (it IS
+        // structure the AI should repaint).
+        const mc = document.createElement("canvas");
+        mc.width = photoW;
+        mc.height = photoH;
+        const mx = mc.getContext("2d");
+        mx.drawImage(maskImg, 0, 0, photoW, photoH);
+        mx.save();
+        abovePath(mx);
+        mx.clip();
+        mx.fillStyle = "#000";
+        mx.fillRect(0, 0, photoW, photoH);
+        mx.restore();
+        strokeHeader(mx, "#ffffff");
+        const mask = mc.toDataURL("image/png");
+
+        return { composite, mask };
+      }
+
       async function renderScene(payload) {
         const {
           photoDataUrl,
@@ -596,7 +709,7 @@
         const wallW_C = (cSpec?.width_in || 120) / 12;
         // Use the PnP-fitted height so the structure seats on the patio. Falls
         // back to the configured height if auto-fit wasn't provided.
-        const wallH = camera.solvedHeight || (bSpec?.height_in || 96) / 12;
+        let wallH = camera.solvedHeight || (bSpec?.height_in || 96) / 12;
         // CRITICAL: buildWall reads wall.height_in internally, so override both
         // wall specs to the fitted height — otherwise the walls stay at the
         // configured height while the roof sits at the fitted height, and they
@@ -607,6 +720,17 @@
         }
         const fc = fcHex(frameColour);
         const roofStyle = roof.style;
+        // Under-existing: no NEW roof — walls rise to the EXISTING house roof.
+        // Overshoot the fitted height so the walls clear the traced roofline
+        // everywhere; applyUnderExisting() then clips them exactly to that line.
+        const underExisting = roofStyle === "under_existing";
+        // Under-existing only: whether to add a NEW gable/wing accent above the
+        // header (true, default) or keep the EXISTING gable and just run the walls
+        // up to it ("walls only", false). No effect on other roof styles.
+        const includeGableWings = payload.includeGableWings !== false;
+        // No height overshoot: panels build to the fitted eave height (wallH).
+        // buildWall adds a gable/wing fill above that which overshoots and is
+        // clipped to the traced roofline in applyUnderExisting().
         // Fixed dark shingle tone. We used to sample the photo's top strip, but on
         // backyard/pool shots that strip is SKY — so the roof rendered light/white.
         // The AI repaints the roof to match the house roof via the prompt anyway;
@@ -668,21 +792,22 @@
         sunroom.position.y = -(payload.dropFt || 0);
 
         if (bSpec) {
-          const wallB = buildWall(bSpec, fc, roofStyle, shHex, true);
+          const wallB = buildWall(bSpec, fc, roofStyle, shHex, true, includeGableWings);
           wallB.rotation.y = -Math.PI / 2;
           wallB.position.set(0, 0, 0);
           sunroom.add(wallB);
         }
 
         if (cSpec) {
-          const wallC = buildWall(cSpec, fc, roofStyle, shHex, false);
+          const wallC = buildWall(cSpec, fc, roofStyle, shHex, false, includeGableWings);
           wallC.rotation.y = Math.PI;
           wallC.scale.x = -1;
           wallC.position.set(0, 0, wallW_B);
           sunroom.add(wallC);
         }
 
-        sunroom.add(buildRoof(wallW_B, wallW_C, wallH, roofStyle, shHex, fc));
+        if (!underExisting)
+          sunroom.add(buildRoof(wallW_B, wallW_C, wallH, roofStyle, shHex, fc));
         sunroom.add(buildShadow(wallW_B, wallW_C));
 
         // ── Opaque dark INTERIOR occluder ──────────────────────────────────────
@@ -694,7 +819,9 @@
         // the glass surface), which is how real sunroom glass photographs.
         {
           const inset = 0.5; // ft inside each wall, so it never pokes through glass
-          const ih = Math.max(0.1, wallH - 0.2);
+          // Under-existing: extend the occluder up past the gable/wing fill so the
+          // glass fill shows a dark interior (not the existing roof bleeding through).
+          const ih = underExisting ? wallH * 2 : Math.max(0.1, wallH - 0.2);
           const interior = new THREE.Mesh(
             new THREE.BoxGeometry(
               Math.max(0.1, wallW_C - inset * 2),
@@ -801,10 +928,20 @@
         scene.background = new THREE.Color(0x000000);
         scene.overrideMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
         renderer.render(scene, cam);
-        const maskURL = canvas.toDataURL("image/png");
+        let maskURL = canvas.toDataURL("image/png");
         scene.overrideMaterial = null;
         scene.background = savedBg;
         hidden.forEach((o) => (o.visible = true));
+
+        // Under-existing: clip both passes to the traced existing roofline and add
+        // the header beam. No-op for every other roof style.
+        if (underExisting && payload.roofline && payload.roofline.length >= 2) {
+          const ue = await applyUnderExisting(
+            compositeURL, maskURL, photoDataUrl, payload.roofline, photoW, photoH, fc,
+          );
+          compositeURL = ue.composite;
+          maskURL = ue.mask;
+        }
 
         window.__result = { composite: compositeURL, mask: maskURL };
         if (window.__done) window.__done(window.__result);

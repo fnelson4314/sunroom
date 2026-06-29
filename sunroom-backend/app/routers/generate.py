@@ -27,6 +27,10 @@ class GenerateRequest(BaseModel):
     mount_height: Optional[str] = ""
     projection_distance: Optional[str] = ""
     roof_only_sub_style: Optional[str] = None
+    under_existing_shape: Optional[str] = None
+    # Under-existing: True = add a new gable/wing infill above the header;
+    # False = "walls only" (keep the existing gable). Default True.
+    include_gable_wings: Optional[bool] = True
     wall_corners: Optional[str] = ""
 
     class Config:
@@ -61,6 +65,8 @@ async def start_generation(body: GenerateRequest):
             mount_height=body.mount_height or "",
             projection_distance=body.projection_distance or "",
             roof_only_sub_style=body.roof_only_sub_style,
+            under_existing_shape=body.under_existing_shape,
+            include_gable_wings=body.include_gable_wings if body.include_gable_wings is not None else True,
             wall_corners=body.wall_corners or "",
         )
         logger.info(f"Task enqueued: {task.id} (wall_system={body.wall_system}, roof_style={body.roof_style})")

@@ -64,6 +64,8 @@ export default function ConfigureScreen() {
     wall_corners?: string;
     preset_wall_count?: string;
     preset_wall_combo?: string;
+    preset_roof_style?: string;
+    preset_existing_roof?: string;
   }>();
 
   const [currentStep, setCurrentStep] = useState(1);
@@ -160,6 +162,16 @@ export default function ConfigureScreen() {
         (params.preset_wall_combo === "AB" || params.preset_wall_combo === "BC")
       ) {
         configure.setWallCombo(params.preset_wall_combo);
+      }
+    }
+    // Pre-select the roof style from the camera build-type (under-existing).
+    if (params.preset_roof_style === "under_existing") {
+      configure.setRoofStyle("under_existing");
+      if (
+        params.preset_existing_roof === "gable" ||
+        params.preset_existing_roof === "studio"
+      ) {
+        configure.setUnderExistingShape(params.preset_existing_roof);
       }
     }
   }, []);
@@ -731,6 +743,57 @@ export default function ConfigureScreen() {
                 : "Wall Configuration"}
             </Text>
 
+            {/* Under-existing: include a new gable/wing infill, or walls only
+                (keep the existing gable). Hidden for screen rooms. */}
+            {configure.state.roofStyle === "under_existing" && !isScreenRoom && (
+              <View>
+                <Text style={styles.fieldLabel}>Gable / Wing Area</Text>
+                <Text style={styles.fieldHint}>
+                  Is there an existing gable above to keep, or should we add new
+                  gable/wing glass up to the roof?
+                </Text>
+                <View style={styles.optionGrid}>
+                  {(
+                    [
+                      {
+                        value: true,
+                        label: "Add Gable / Wings",
+                        desc: "New glass or solid infill up to the roof",
+                      },
+                      {
+                        value: false,
+                        label: "Walls Only",
+                        desc: "Keep the existing gable above the walls",
+                      },
+                    ] as const
+                  ).map((opt) => (
+                    <Pressable
+                      key={String(opt.value)}
+                      style={[
+                        styles.optionCard,
+                        configure.state.includeGableWings === opt.value &&
+                          styles.optionCardSelected,
+                      ]}
+                      onPress={() =>
+                        configure.setIncludeGableWings(opt.value, allOptions)
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.optionName,
+                          configure.state.includeGableWings === opt.value &&
+                            styles.optionNameSelected,
+                        ]}
+                      >
+                        {opt.label}
+                      </Text>
+                      <Text style={styles.optionDesc}>{opt.desc}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            )}
+
             {isScreenRoom ? (
               <ScreenRoomBuilder
                 screenRoom={configure.state.screenRoom}
@@ -758,7 +821,18 @@ export default function ConfigureScreen() {
               />
             ) : (
               <WallBuilder
-                roofStyle={configure.state.roofStyle}
+                // Under-existing reuses the gable/wing glass config of the
+                // existing roof's shape (gable → wall B gable glass; studio →
+                // A/C wing glass), so the user can pick glass/solid and see it.
+                roofStyle={
+                  configure.state.roofStyle === "under_existing"
+                    ? // Walls-only keeps the existing gable, so suppress the
+                      // gable/wing glass UI by passing a shape WallBuilder ignores.
+                      configure.state.includeGableWings
+                      ? configure.state.underExistingShape ?? "gable"
+                      : "under_existing"
+                    : configure.state.roofStyle
+                }
                 mountHeight={configure.state.mountHeight}
                 walls={configure.state.walls}
                 wallSystem={

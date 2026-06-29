@@ -229,6 +229,14 @@ async function render3D(body) {
     debug: body.debug === true || process.env.RENDER_DEBUG === "1",
     // Manual vertical nudge (feet) to seat the structure on the ground.
     dropFt: parseFloat(body.dropFt) || 0,
+    // Under-existing: traced existing-roof underside polyline (normalized image
+    // coords, left->right). The renderer clips walls to this line and draws a
+    // header beam instead of a new roof. Null/absent for all other roof styles.
+    roofline: Array.isArray(body.roofline) ? body.roofline : null,
+    // Under-existing: false = "walls only" (keep the existing gable above, run the
+    // walls up to it as a plain glass continuation); true/absent = add a new
+    // gable/wing accent above the header. No effect on other roof styles.
+    includeGableWings: body.includeGableWings !== false,
   };
 
   // A nonzero dropFt is the ONLY thing that shifts the structure vertically in

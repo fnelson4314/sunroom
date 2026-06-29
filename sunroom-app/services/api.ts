@@ -128,6 +128,8 @@ export const startGeneration = async (data: {
   mount_height?: string;
   projection_distance?: string;
   roof_only_sub_style?: string | null;
+  under_existing_shape?: string | null;
+  include_gable_wings?: boolean;
   wall_corners?: string;
 }) => {
   try {

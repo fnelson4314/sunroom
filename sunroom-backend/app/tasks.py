@@ -78,6 +78,8 @@ def generate_sunroom(
     mount_height: str = "",
     projection_distance: str = "",
     roof_only_sub_style: str = None,
+    under_existing_shape: str = None,
+    include_gable_wings: bool = True,
     wall_corners: str = "",
 ):
     def is_cancelled() -> bool:
@@ -115,6 +117,8 @@ def generate_sunroom(
             roof_style=roof_style,
             wall_system=wall_system,
             wall_color=wall_color,
+            under_existing_shape=under_existing_shape,
+            include_gable_wings=include_gable_wings,
         )
 
         if is_cancelled():
@@ -149,6 +153,12 @@ def generate_sunroom(
         if parsed_corners and "_5pt" in parsed_corners:
             pts = parsed_corners["_5pt"]
 
+        # Under-existing: the traced existing-roof underside polyline. The renderer
+        # clips the walls to it and draws a header beam instead of a new roof.
+        roofline = None
+        if parsed_corners and isinstance(parsed_corners.get("_roofline"), list):
+            roofline = parsed_corners["_roofline"]
+
         # ── Step 5: 3D render via Node.js service ─────────────────────────────
         use_3d_composite = pts is not None
         render_mask_bytes = None  # exact structure mask from the renderer, if any
@@ -169,6 +179,8 @@ def generate_sunroom(
                     "mountHeight":       mount_height,
                     "projectionDistance": projection_distance,
                     "dropFt":            STRUCTURE_DROP_FT,
+                    "roofline":          roofline,
+                    "includeGableWings": include_gable_wings,
                 }
 
                 with httpx.Client(timeout=90) as client:
