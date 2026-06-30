@@ -1,4 +1,5 @@
 import { Colors } from "@/constants/Colors";
+import { FontSize } from "@/constants/Typography";
 import { getSession } from "@/services/api";
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
@@ -273,11 +274,11 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   loadingText: {
-    fontSize: 14,
+    fontSize: FontSize.callout,
     color: Colors.text.secondary,
   },
   errorText: {
-    fontSize: 15,
+    fontSize: FontSize.label,
     color: Colors.status.failed,
     textAlign: "center",
   },
@@ -289,7 +290,7 @@ const styles = StyleSheet.create({
   },
   backButtonText: {
     color: Colors.white,
-    fontSize: 15,
+    fontSize: FontSize.label,
     fontWeight: "600",
   },
   scroll: {
@@ -321,7 +322,7 @@ const styles = StyleSheet.create({
   },
   noRenderBannerText: {
     color: Colors.white,
-    fontSize: 13,
+    fontSize: FontSize.body,
     textAlign: "center",
     fontWeight: "500",
   },
@@ -337,7 +338,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   noImageText: {
-    fontSize: 14,
+    fontSize: FontSize.callout,
     color: Colors.text.tertiary,
   },
   statusRow: {
@@ -352,11 +353,11 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   statusText: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "600",
   },
   dateText: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     color: Colors.text.tertiary,
   },
   card: {
@@ -368,19 +369,19 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   cardLabel: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     fontWeight: "700",
     textTransform: "uppercase",
     letterSpacing: 0.5,
     color: Colors.text.tertiary,
   },
   cardTitle: {
-    fontSize: 18,
+    fontSize: FontSize.heading,
     fontWeight: "700",
     color: Colors.text.primary,
   },
   cardSub: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     color: Colors.text.secondary,
   },
   dimensionRow: {
@@ -397,12 +398,12 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   dimensionValue: {
-    fontSize: 16,
+    fontSize: FontSize.label,
     fontWeight: "700",
     color: Colors.text.primary,
   },
   dimensionLabel: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     color: Colors.text.tertiary,
     textTransform: "uppercase",
     letterSpacing: 0.4,
@@ -418,22 +419,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   priceLabel: {
-    fontSize: 14,
+    fontSize: FontSize.callout,
     fontWeight: "600",
     color: Colors.text.secondary,
   },
   priceValue: {
-    fontSize: 24,
+    fontSize: FontSize.largeTitle,
     fontWeight: "800",
     color: Colors.status.complete,
   },
   notesText: {
-    fontSize: 14,
+    fontSize: FontSize.callout,
     color: Colors.text.secondary,
-    lineHeight: 20,
+    lineHeight: 22,
   },
   sessionId: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     color: Colors.text.tertiary,
     textAlign: "center",
     fontFamily: "monospace",
@@ -455,7 +456,7 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: {
     color: Colors.white,
-    fontSize: 16,
+    fontSize: FontSize.label,
     fontWeight: "700",
   },
   retryButton: {
@@ -468,7 +469,7 @@ const styles = StyleSheet.create({
   },
   retryButtonText: {
     color: Colors.text.secondary,
-    fontSize: 15,
+    fontSize: FontSize.label,
     fontWeight: "600",
   },
   secondaryButtons: {
@@ -485,7 +486,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
   },
   secondaryButtonText: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "600",
     color: Colors.text.secondary,
   },

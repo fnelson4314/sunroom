@@ -7,6 +7,7 @@ import WallBuilder, {
   PANEL_TYPES,
 } from "@/components/configure/WallBuilder";
 import { Colors } from "@/constants/Colors";
+import { FontSize } from "@/constants/Typography";
 import type { Option } from "@/hooks/useConfigureState";
 import { inToCeilFt, useConfigureState } from "@/hooks/useConfigureState";
 import {
@@ -109,7 +110,7 @@ export default function ConfigureScreen() {
             onPress={confirmDiscardAndBack}
             style={{ paddingHorizontal: 8, paddingVertical: 6 }}
           >
-            <Text style={{ fontSize: 17, color: Colors.primary }}>‹ Back</Text>
+            <Text style={{ fontSize: FontSize.subhead, color: Colors.primary }}>‹ Back</Text>
           </TouchableOpacity>
         ) : undefined,
     });
@@ -441,7 +442,7 @@ export default function ConfigureScreen() {
 
             {/* Roof-only sub-style: gable or studio/single */}
             {isRoofOnly && (
-              <View>
+              <View style={styles.fieldBlock}>
                 <Text style={styles.fieldLabel}>Roof Shape</Text>
                 <Text style={styles.fieldHint}>
                   Choose the shape of the roof being installed
@@ -476,9 +477,7 @@ export default function ConfigureScreen() {
                 </View>
 
                 {/* Roof dimensions — inputs in inches, priced as ceil-ft, no overhang */}
-                <Text style={[styles.fieldLabel, { marginTop: 12 }]}>
-                  Roof Dimensions
-                </Text>
+                <Text style={styles.fieldLabel}>Roof Dimensions</Text>
                 <Text style={styles.fieldHint}>
                   Enter in inches — converted to ceiling feet for pricing, no
                   overhang added
@@ -569,7 +568,7 @@ export default function ConfigureScreen() {
 
             {/* Mount height — gable and studio only (roof_only has its own inline input above) */}
             {showMountHeight && configure.state.roofStyle !== "roof_only" && (
-              <View>
+              <View style={styles.fieldBlock}>
                 <Text style={styles.fieldLabel}>Mount Height (ft)</Text>
                 <Text style={styles.fieldHint}>
                   {roofStyle === "gable" ||
@@ -620,7 +619,7 @@ export default function ConfigureScreen() {
                 </View>
 
                 {configure.state.numberOfWalls === 2 && (
-                  <View style={{ marginTop: 12 }}>
+                  <View style={[styles.fieldBlock, { marginTop: 12 }]}>
                     <Text style={styles.fieldLabel}>Wall Position</Text>
                     <Text style={styles.fieldHint}>
                       Which two walls of the sunroom
@@ -745,54 +744,55 @@ export default function ConfigureScreen() {
 
             {/* Under-existing: include a new gable/wing infill, or walls only
                 (keep the existing gable). Hidden for screen rooms. */}
-            {configure.state.roofStyle === "under_existing" && !isScreenRoom && (
-              <View>
-                <Text style={styles.fieldLabel}>Gable / Wing Area</Text>
-                <Text style={styles.fieldHint}>
-                  Is there an existing gable above to keep, or should we add new
-                  gable/wing glass up to the roof?
-                </Text>
-                <View style={styles.optionGrid}>
-                  {(
-                    [
-                      {
-                        value: true,
-                        label: "Add Gable / Wings",
-                        desc: "New glass or solid infill up to the roof",
-                      },
-                      {
-                        value: false,
-                        label: "Walls Only",
-                        desc: "Keep the existing gable above the walls",
-                      },
-                    ] as const
-                  ).map((opt) => (
-                    <Pressable
-                      key={String(opt.value)}
-                      style={[
-                        styles.optionCard,
-                        configure.state.includeGableWings === opt.value &&
-                          styles.optionCardSelected,
-                      ]}
-                      onPress={() =>
-                        configure.setIncludeGableWings(opt.value, allOptions)
-                      }
-                    >
-                      <Text
+            {configure.state.roofStyle === "under_existing" &&
+              !isScreenRoom && (
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.fieldLabel}>Gable / Wing Area</Text>
+                  <Text style={styles.fieldHint}>
+                    Is there an existing gable/wing above to keep, or should new
+                    gable/wing panes be added up to the roof?
+                  </Text>
+                  <View style={styles.optionGrid}>
+                    {(
+                      [
+                        {
+                          value: true,
+                          label: "Add Gable / Wings",
+                          desc: "New glass or solid infill up to the roof",
+                        },
+                        {
+                          value: false,
+                          label: "Walls Only",
+                          desc: "Keep the existing gable above the walls",
+                        },
+                      ] as const
+                    ).map((opt) => (
+                      <Pressable
+                        key={String(opt.value)}
                         style={[
-                          styles.optionName,
+                          styles.optionCard,
                           configure.state.includeGableWings === opt.value &&
-                            styles.optionNameSelected,
+                            styles.optionCardSelected,
                         ]}
+                        onPress={() =>
+                          configure.setIncludeGableWings(opt.value, allOptions)
+                        }
                       >
-                        {opt.label}
-                      </Text>
-                      <Text style={styles.optionDesc}>{opt.desc}</Text>
-                    </Pressable>
-                  ))}
+                        <Text
+                          style={[
+                            styles.optionName,
+                            configure.state.includeGableWings === opt.value &&
+                              styles.optionNameSelected,
+                          ]}
+                        >
+                          {opt.label}
+                        </Text>
+                        <Text style={styles.optionDesc}>{opt.desc}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
                 </View>
-              </View>
-            )}
+              )}
 
             {isScreenRoom ? (
               <ScreenRoomBuilder
@@ -829,7 +829,7 @@ export default function ConfigureScreen() {
                     ? // Walls-only keeps the existing gable, so suppress the
                       // gable/wing glass UI by passing a shape WallBuilder ignores.
                       configure.state.includeGableWings
-                      ? configure.state.underExistingShape ?? "gable"
+                      ? (configure.state.underExistingShape ?? "gable")
                       : "under_existing"
                     : configure.state.roofStyle
                 }
@@ -1135,7 +1135,7 @@ export default function ConfigureScreen() {
                       Roof — {configure.state.roofType.name}
                       {"\n"}
                       <Text
-                        style={{ fontSize: 13, color: Colors.text.tertiary }}
+                        style={{ fontSize: FontSize.body, color: Colors.text.tertiary }}
                       >
                         {roofDetail}
                       </Text>
@@ -1308,7 +1308,7 @@ const styles = StyleSheet.create({
   scrollContent: { padding: 16, paddingBottom: 32 },
   stepContent: { gap: 12 },
   stepTitle: {
-    fontSize: 22,
+    fontSize: FontSize.sectionTitle,
     fontWeight: "700",
     color: Colors.text.primary,
     marginBottom: 4,
@@ -1319,19 +1319,30 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   stepSubtotal: {
-    fontSize: 16,
+    fontSize: FontSize.label,
     fontWeight: "700",
     color: Colors.status.complete,
   },
   fieldLabel: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "700",
     color: Colors.text.primary,
     textTransform: "uppercase",
     letterSpacing: 0.5,
     marginTop: 8,
   },
-  fieldHint: { fontSize: 12, color: Colors.text.tertiary, marginTop: -8 },
+  // The -8 cancels the parent's `gap: 12` so the hint sits ~4px under its label.
+  // This ONLY works when the hint's parent supplies that gap — always place a
+  // fieldLabel+fieldHint pair inside `stepContent` or a `fieldBlock` (both gap:12),
+  // never a bare <View>, or the negative margin overlaps the label.
+  fieldHint: {
+    fontSize: FontSize.small,
+    color: Colors.text.tertiary,
+    marginTop: -8,
+  },
+  // Wrapper for a group of fields/labels/hints — mirrors stepContent's gap so the
+  // fieldHint spacing math holds inside nested blocks too.
+  fieldBlock: { gap: 12 },
   optionGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   optionCard: {
     backgroundColor: Colors.surface,
@@ -1347,9 +1358,9 @@ const styles = StyleSheet.create({
     borderColor: Colors.primary,
     backgroundColor: Colors.primaryTint,
   },
-  optionName: { fontSize: 14, fontWeight: "600", color: Colors.text.primary },
+  optionName: { fontSize: FontSize.callout, fontWeight: "600", color: Colors.text.primary },
   optionNameSelected: { color: Colors.primary },
-  optionDesc: { fontSize: 13, color: Colors.text.tertiary },
+  optionDesc: { fontSize: FontSize.body, color: Colors.text.tertiary },
   wallCountRow: { flexDirection: "row", gap: 10 },
   wallCountCard: {
     flex: 1,
@@ -1366,19 +1377,19 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primaryTint,
   },
   wallCountNumber: {
-    fontSize: 32,
+    fontSize: FontSize.displayLarge,
     fontWeight: "700",
     color: Colors.text.secondary,
   },
   wallCountNumberSelected: { color: Colors.primary },
-  wallCountLabel: { fontSize: 12, color: Colors.text.tertiary },
+  wallCountLabel: { fontSize: FontSize.small, color: Colors.text.tertiary },
   noteInput: {
     backgroundColor: Colors.surface,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: Colors.border,
     padding: 12,
-    fontSize: 14,
+    fontSize: FontSize.callout,
     color: Colors.text.primary,
     textAlignVertical: "top",
     minHeight: 60,
@@ -1389,7 +1400,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     padding: 12,
-    fontSize: 15,
+    fontSize: FontSize.label,
     color: Colors.text.primary,
   },
   notesInput: { height: 80, textAlignVertical: "top" },
@@ -1402,12 +1413,12 @@ const styles = StyleSheet.create({
   },
   summaryLineName: {
     flex: 1,
-    fontSize: 13,
+    fontSize: FontSize.body,
     color: Colors.text.secondary,
     paddingRight: 8,
   },
   summaryLineValue: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "600",
     color: Colors.text.primary,
   },
@@ -1418,12 +1429,12 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   grandTotalLabel: {
-    fontSize: 16,
+    fontSize: FontSize.label,
     fontWeight: "700",
     color: Colors.text.primary,
   },
   grandTotalValue: {
-    fontSize: 22,
+    fontSize: FontSize.sectionTitle,
     fontWeight: "700",
     color: Colors.status.complete,
   },
@@ -1441,14 +1452,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   footerTotalLabel: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     fontWeight: "600",
     color: Colors.text.tertiary,
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
   footerTotalValue: {
-    fontSize: 20,
+    fontSize: FontSize.title,
     fontWeight: "700",
     color: Colors.status.complete,
   },
@@ -1463,7 +1474,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   prevButtonText: {
-    fontSize: 15,
+    fontSize: FontSize.label,
     fontWeight: "600",
     color: Colors.text.secondary,
   },
@@ -1474,7 +1485,7 @@ const styles = StyleSheet.create({
     padding: 14,
     alignItems: "center",
   },
-  nextButtonText: { fontSize: 15, fontWeight: "600", color: Colors.white },
+  nextButtonText: { fontSize: FontSize.label, fontWeight: "600", color: Colors.white },
   generateButton: {
     flex: 2,
     backgroundColor: Colors.primary,
@@ -1482,7 +1493,7 @@ const styles = StyleSheet.create({
     padding: 14,
     alignItems: "center",
   },
-  generateButtonText: { fontSize: 15, fontWeight: "600", color: Colors.white },
+  generateButtonText: { fontSize: FontSize.label, fontWeight: "600", color: Colors.white },
   buttonDisabled: { opacity: 0.4 },
   saveDraftButton: {
     alignItems: "center",
@@ -1493,7 +1504,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
   },
   saveDraftText: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "600",
     color: Colors.text.secondary,
   },
@@ -1505,9 +1516,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.primary,
   },
-  generateEarlyText: { fontSize: 13, fontWeight: "600", color: Colors.primary },
-  loadingText: { fontSize: 14, color: Colors.text.secondary },
-  errorText: { fontSize: 15, color: Colors.status.failed, textAlign: "center" },
+  generateEarlyText: { fontSize: FontSize.body, fontWeight: "600", color: Colors.primary },
+  loadingText: { fontSize: FontSize.callout, color: Colors.text.secondary },
+  errorText: { fontSize: FontSize.label, color: Colors.status.failed, textAlign: "center" },
   roofDimsRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1515,7 +1526,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   roofDimLabel: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "600",
     color: Colors.text.tertiary,
     textTransform: "uppercase",
@@ -1523,13 +1534,13 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   roofDimSep: {
-    fontSize: 20,
+    fontSize: FontSize.title,
     fontWeight: "300",
     color: Colors.text.tertiary,
     marginTop: 20,
   },
   roofDimConvert: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     color: Colors.text.tertiary,
     textAlign: "center",
     fontStyle: "italic",
@@ -1545,7 +1556,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.primary,
   },
   roofDimResultText: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "700",
     color: Colors.primary,
   },

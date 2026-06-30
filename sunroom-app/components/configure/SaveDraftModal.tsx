@@ -1,4 +1,5 @@
 import { Colors } from "@/constants/Colors";
+import { FontSize } from "@/constants/Typography";
 import {
   ActivityIndicator,
   Modal,
@@ -113,12 +114,12 @@ const styles = StyleSheet.create({
     elevation: 20,
   },
   title: {
-    fontSize: 18,
+    fontSize: FontSize.heading,
     fontWeight: "700",
     color: Colors.text.primary,
   },
   sub: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     color: Colors.text.secondary,
     marginTop: -6,
   },
@@ -128,7 +129,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: Colors.border,
     padding: 12,
-    fontSize: 15,
+    fontSize: FontSize.label,
     color: Colors.text.primary,
   },
   buttons: {
@@ -145,7 +146,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   cancelText: {
-    fontSize: 14,
+    fontSize: FontSize.callout,
     fontWeight: "600",
     color: Colors.text.secondary,
   },
@@ -157,7 +158,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   saveText: {
-    fontSize: 14,
+    fontSize: FontSize.callout,
     fontWeight: "700",
     color: Colors.white,
   },

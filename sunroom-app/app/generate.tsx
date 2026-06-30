@@ -1,4 +1,5 @@
 import { Colors } from "@/constants/Colors";
+import { FontSize } from "@/constants/Typography";
 import {
   cancelGeneration,
   createSession,
@@ -471,21 +472,21 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   successIcon: {
-    fontSize: 48,
+    fontSize: FontSize.icon,
     color: Colors.status.complete,
   },
   failIcon: {
-    fontSize: 48,
+    fontSize: FontSize.icon,
     color: Colors.status.failed,
   },
   statusMessage: {
-    fontSize: 24,
+    fontSize: FontSize.largeTitle,
     fontWeight: "700",
     color: Colors.white,
     textAlign: "center",
   },
   statusHint: {
-    fontSize: 15,
+    fontSize: FontSize.label,
     color: "rgba(255,255,255,0.7)",
     textAlign: "center",
     marginTop: -8,
@@ -539,11 +540,11 @@ const styles = StyleSheet.create({
   },
   progressDotCheck: {
     color: Colors.white,
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "700",
   },
   progressLabel: {
-    fontSize: 11,
+    fontSize: FontSize.caption,
     color: "rgba(255,255,255,0.55)",
     marginTop: 5,
     textAlign: "center",
@@ -572,7 +573,7 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: {
     color: Colors.white,
-    fontSize: 17,
+    fontSize: FontSize.subhead,
     fontWeight: "700",
   },
   buttonRow: {
@@ -590,7 +591,7 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: {
     color: Colors.white,
-    fontSize: 16,
+    fontSize: FontSize.label,
     fontWeight: "600",
   },
   cancelButton: {
@@ -607,7 +608,7 @@ const styles = StyleSheet.create({
   },
   cancelButtonText: {
     color: Colors.white,
-    fontSize: 15,
+    fontSize: FontSize.label,
     fontWeight: "600",
   },
 });

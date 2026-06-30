@@ -1,4 +1,5 @@
 import { Colors } from "@/constants/Colors";
+import { FontSize } from "@/constants/Typography";
 import { Link } from "expo-router";
 import { StyleSheet, Text, View } from "react-native";
 
@@ -22,13 +23,13 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   title: {
-    fontSize: 20,
+    fontSize: FontSize.title,
     fontWeight: "600",
     color: Colors.text.primary,
     marginBottom: 16,
   },
   link: {
-    fontSize: 16,
+    fontSize: FontSize.label,
     color: Colors.primary,
   },
 });

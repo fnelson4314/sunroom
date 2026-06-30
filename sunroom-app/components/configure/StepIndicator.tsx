@@ -1,4 +1,5 @@
 import { Colors } from "@/constants/Colors";
+import { FontSize } from "@/constants/Typography";
 import {
   ScrollView,
   StyleSheet,
@@ -118,14 +119,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   stepCount: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     fontWeight: "700",
     color: Colors.text.secondary,
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
   stepName: {
-    fontSize: 15,
+    fontSize: FontSize.label,
     fontWeight: "700",
     color: Colors.primary,
   },
@@ -175,11 +176,11 @@ const styles = StyleSheet.create({
   },
   dotCheck: {
     color: Colors.white,
-    fontSize: 15,
+    fontSize: FontSize.label,
     fontWeight: "700",
   },
   dotNumber: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "700",
     color: Colors.text.secondary,
   },
@@ -188,7 +189,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   dotLabel: {
-    fontSize: 11,
+    fontSize: FontSize.caption,
     color: Colors.text.secondary,
     marginTop: 4,
     textAlign: "center",

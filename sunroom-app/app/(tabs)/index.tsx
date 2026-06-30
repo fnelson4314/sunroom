@@ -1,4 +1,5 @@
 import { Colors } from "@/constants/Colors";
+import { FontSize } from "@/constants/Typography";
 import { deleteSession, getSessionsBySalesperson } from "@/services/api";
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
@@ -341,20 +342,20 @@ const styles = StyleSheet.create({
   cardLeft: { flex: 1, gap: 3 },
   cardRight: { alignItems: "flex-end", gap: 6, minWidth: 80 },
   cardActions: { flexDirection: "row", alignItems: "center", gap: 8 },
-  customerName: { fontSize: 16, fontWeight: "600", color: Colors.text.primary },
-  productName: { fontSize: 13, color: Colors.text.secondary },
-  dimensions: { fontSize: 13, color: Colors.text.tertiary },
+  customerName: { fontSize: FontSize.label, fontWeight: "600", color: Colors.text.primary },
+  productName: { fontSize: FontSize.body, color: Colors.text.secondary },
+  dimensions: { fontSize: FontSize.body, color: Colors.text.tertiary },
   statusBadge: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 20 },
-  statusText: { fontSize: 13, fontWeight: "600" },
-  price: { fontSize: 15, fontWeight: "700", color: Colors.status.complete },
-  date: { fontSize: 13, color: Colors.text.tertiary },
+  statusText: { fontSize: FontSize.body, fontWeight: "600" },
+  price: { fontSize: FontSize.label, fontWeight: "700", color: Colors.status.complete },
+  date: { fontSize: FontSize.body, color: Colors.text.tertiary },
   continueButton: {
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
     backgroundColor: Colors.primary,
   },
-  continueButtonText: { fontSize: 13, fontWeight: "700", color: "#fff" },
+  continueButtonText: { fontSize: FontSize.body, fontWeight: "700", color: "#fff" },
   deleteButton: {
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -363,7 +364,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.status.failed + "60",
   },
   deleteButtonText: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "600",
     color: Colors.status.failed,
   },
@@ -374,13 +375,13 @@ const styles = StyleSheet.create({
     paddingVertical: 80,
     gap: 8,
   },
-  emptyTitle: { fontSize: 18, fontWeight: "600", color: Colors.text.primary },
+  emptyTitle: { fontSize: FontSize.heading, fontWeight: "600", color: Colors.text.primary },
   emptySubtitle: {
-    fontSize: 14,
+    fontSize: FontSize.callout,
     color: Colors.text.secondary,
     textAlign: "center",
     maxWidth: 260,
-    lineHeight: 20,
+    lineHeight: 22,
   },
   footer: {
     padding: 16,
@@ -395,9 +396,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
   },
-  newButtonText: { color: Colors.white, fontSize: 16, fontWeight: "600" },
+  newButtonText: { color: Colors.white, fontSize: FontSize.label, fontWeight: "600" },
   errorText: {
-    fontSize: 15,
+    fontSize: FontSize.label,
     color: Colors.status.failed,
     textAlign: "center",
     marginBottom: 16,
@@ -408,7 +409,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 10,
   },
-  retryText: { color: Colors.white, fontSize: 15, fontWeight: "600" },
+  retryText: { color: Colors.white, fontSize: FontSize.label, fontWeight: "600" },
   modalOverlay: {
     position: "absolute",
     top: 0,
@@ -431,8 +432,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 12,
   },
-  modalTitle: { fontSize: 17, fontWeight: "700", color: Colors.text.primary },
-  modalBody: { fontSize: 14, color: Colors.text.secondary, lineHeight: 20 },
+  modalTitle: { fontSize: FontSize.subhead, fontWeight: "700", color: Colors.text.primary },
+  modalBody: { fontSize: FontSize.callout, color: Colors.text.secondary, lineHeight: 22 },
   modalButtons: { flexDirection: "row", gap: 10, marginTop: 8 },
   modalCancel: {
     flex: 1,
@@ -444,7 +445,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
   },
   modalCancelText: {
-    fontSize: 15,
+    fontSize: FontSize.label,
     fontWeight: "600",
     color: Colors.text.primary,
   },
@@ -458,7 +459,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.status.failed + "40",
   },
   modalDeleteText: {
-    fontSize: 15,
+    fontSize: FontSize.label,
     fontWeight: "600",
     color: Colors.status.failed,
   },

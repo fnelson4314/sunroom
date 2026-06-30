@@ -1,4 +1,5 @@
 import { Colors } from "@/constants/Colors";
+import { FontSize } from "@/constants/Typography";
 import type {
   GableGlassConfig,
   Option,
@@ -1042,7 +1043,7 @@ export default function ScreenRoomBuilder({
                   <View>
                     <Text
                       style={{
-                        fontSize: 13,
+                        fontSize: FontSize.body,
                         fontWeight: "600",
                         color:
                           effectiveGable.count > 1
@@ -1054,7 +1055,7 @@ export default function ScreenRoomBuilder({
                     </Text>
                     <Text
                       style={{
-                        fontSize: 11,
+                        fontSize: FontSize.caption,
                         color: Colors.text.tertiary,
                         marginTop: 1,
                       }}
@@ -1181,7 +1182,7 @@ export default function ScreenRoomBuilder({
                         justifyContent: "center",
                       }}
                     >
-                      <Text style={{ color: SCREEN_FRAME, fontSize: 12 }}>
+                      <Text style={{ color: SCREEN_FRAME, fontSize: FontSize.small }}>
                         Enter wall width to generate units
                       </Text>
                     </View>
@@ -1223,7 +1224,7 @@ export default function ScreenRoomBuilder({
                   {unitWidths.map((uw, i) => (
                     <View key={i} style={{ alignItems: "center", gap: 2 }}>
                       <Text
-                        style={{ fontSize: 10, color: Colors.text.tertiary }}
+                        style={{ fontSize: FontSize.tiny, color: Colors.text.tertiary }}
                       >
                         U{i + 1}
                         {activeWall.unitLocked?.[i] ? " 🔒" : ""}
@@ -1416,13 +1417,13 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.border,
   },
   sectionLabel: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     fontWeight: "700",
     color: Colors.text.primary,
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
-  sectionHint: { fontSize: 11, color: Colors.text.tertiary },
+  sectionHint: { fontSize: FontSize.caption, color: Colors.text.tertiary },
 
   wallTypeChip: {
     backgroundColor: Colors.background,
@@ -1435,12 +1436,12 @@ const styles = StyleSheet.create({
   },
   wallTypeChipSel: { borderColor: Colors.primary, backgroundColor: "#EEF2FF" },
   wallTypeChipText: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     fontWeight: "600",
     color: Colors.text.primary,
   },
   wallTypeChipTextSel: { color: Colors.primary },
-  wallTypeChipPrice: { fontSize: 10, color: Colors.text.tertiary },
+  wallTypeChipPrice: { fontSize: FontSize.tiny, color: Colors.text.tertiary },
 
   tab: {
     flex: 1,
@@ -1452,12 +1453,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   tabActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  tabText: { fontSize: 14, fontWeight: "600", color: Colors.text.secondary },
+  tabText: { fontSize: FontSize.callout, fontWeight: "600", color: Colors.text.secondary },
   tabTextActive: { color: "#fff" },
 
   dimField: { flex: 1, gap: 4 },
   dimLabel: {
-    fontSize: 11,
+    fontSize: FontSize.caption,
     fontWeight: "600",
     color: Colors.text.tertiary,
     textTransform: "uppercase",
@@ -1469,13 +1470,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     padding: 10,
-    fontSize: 16,
+    fontSize: FontSize.label,
     fontWeight: "600",
     color: Colors.text.primary,
     textAlign: "center",
   },
   dimConvert: {
-    fontSize: 10,
+    fontSize: FontSize.tiny,
     color: Colors.text.tertiary,
     textAlign: "center",
     fontStyle: "italic",
@@ -1491,11 +1492,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.primary,
   },
-  dimSqFtText: { fontSize: 16, fontWeight: "700", color: Colors.primary },
-  dimSqFtLabel: { fontSize: 10, color: Colors.primary },
+  dimSqFtText: { fontSize: FontSize.label, fontWeight: "700", color: Colors.primary },
+  dimSqFtLabel: { fontSize: FontSize.tiny, color: Colors.primary },
 
   legendSwatch: { width: 14, height: 14, borderRadius: 3 },
-  legendText: { fontSize: 11, color: Colors.text.tertiary },
+  legendText: { fontSize: FontSize.caption, color: Colors.text.tertiary },
 
   unitWidthInput: {
     width: 52,
@@ -1505,7 +1506,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     padding: 6,
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "600",
     color: Colors.text.primary,
   },
@@ -1537,9 +1538,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     borderColor: Colors.primary,
   },
-  checkmark: { fontSize: 13, fontWeight: "700", color: "#fff" },
+  checkmark: { fontSize: FontSize.body, fontWeight: "700", color: "#fff" },
   checkLabel: {
-    fontSize: 14,
+    fontSize: FontSize.callout,
     fontWeight: "500",
     color: Colors.text.primary,
     flex: 1,
@@ -1558,13 +1559,13 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: "#d4a800",
     padding: 8,
-    fontSize: 14,
+    fontSize: FontSize.callout,
     fontWeight: "600",
     color: Colors.text.primary,
     textAlign: "center",
   },
   heightConvert: {
-    fontSize: 11,
+    fontSize: FontSize.caption,
     color: Colors.text.tertiary,
     fontStyle: "italic",
   },
@@ -1582,7 +1583,7 @@ const styles = StyleSheet.create({
   },
   solidPickerBtnActive: { borderColor: "#6b4228", backgroundColor: "#fdf2ee" },
   solidPickerText: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     fontWeight: "600",
     color: Colors.text.secondary,
   },
@@ -1599,7 +1600,7 @@ const styles = StyleSheet.create({
   },
   toggleBtnActive: { borderColor: "#e8621a", backgroundColor: "#FFF4EE" },
   toggleBtnText: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "600",
     color: Colors.text.secondary,
   },
@@ -1622,14 +1623,14 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.background,
   },
   unitsBtnText: {
-    fontSize: 20,
+    fontSize: FontSize.title,
     fontWeight: "400",
     color: Colors.text.secondary,
   },
   unitsCount: {
     flex: 1,
     textAlign: "center",
-    fontSize: 15,
+    fontSize: FontSize.label,
     fontWeight: "700",
     color: Colors.text.primary,
   },
@@ -1640,5 +1641,5 @@ const styles = StyleSheet.create({
     padding: 10,
     alignItems: "center",
   },
-  priceNoteText: { fontSize: 12, fontWeight: "600", color: Colors.primary },
+  priceNoteText: { fontSize: FontSize.small, fontWeight: "600", color: Colors.primary },
 });

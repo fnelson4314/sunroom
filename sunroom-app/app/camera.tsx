@@ -1,4 +1,5 @@
 import { Colors } from "@/constants/Colors";
+import { FontSize } from "@/constants/Typography";
 import { getFullCatalog } from "@/services/api";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
@@ -800,10 +801,10 @@ const styles = StyleSheet.create({
   photo: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   overlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   permissionText: {
-    fontSize: 15,
+    fontSize: FontSize.label,
     color: Colors.text.secondary,
     textAlign: "center",
-    lineHeight: 22,
+    lineHeight: 24,
   },
   angleGuide: {
     position: "absolute",
@@ -833,7 +834,7 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 16,
   },
-  wallCountLabel: { color: "#fff", fontSize: 13, fontWeight: "600" },
+  wallCountLabel: { color: "#fff", fontSize: FontSize.body, fontWeight: "600" },
   wallCountDivider: {
     width: 1,
     height: 20,
@@ -852,7 +853,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     borderColor: Colors.primary,
   },
-  wallCountBtnText: { color: "#fff", fontSize: 13, fontWeight: "600" },
+  wallCountBtnText: { color: "#fff", fontSize: FontSize.body, fontWeight: "600" },
   wallCountBtnTextActive: { color: "#fff" },
   buildTypeRow: {
     flexDirection: "row",
@@ -871,7 +872,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     borderColor: Colors.primary,
   },
-  buildTypeBtnText: { color: "#fff", fontSize: 14, fontWeight: "700" },
+  buildTypeBtnText: { color: "#fff", fontSize: FontSize.callout, fontWeight: "700" },
   buildTypeBtnTextActive: { color: "#fff" },
   existingRoofRow: {
     flexDirection: "row",
@@ -879,7 +880,7 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 4,
   },
-  existingRoofLabel: { color: "rgba(255,255,255,0.85)", fontSize: 13, fontWeight: "600" },
+  existingRoofLabel: { color: "rgba(255,255,255,0.85)", fontSize: FontSize.body, fontWeight: "600" },
   subTypeBtn: {
     paddingHorizontal: 14,
     paddingVertical: 6,
@@ -888,7 +889,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.3)",
   },
-  subTypeBtnText: { color: "#fff", fontSize: 13, fontWeight: "600" },
+  subTypeBtnText: { color: "#fff", fontSize: FontSize.body, fontWeight: "600" },
   cameraFooter: {
     position: "absolute",
     bottom: 0,
@@ -902,7 +903,7 @@ const styles = StyleSheet.create({
   },
   hint: {
     color: "#fff",
-    fontSize: 14,
+    fontSize: FontSize.callout,
     textAlign: "center",
     paddingHorizontal: 24,
   },
@@ -932,7 +933,7 @@ const styles = StyleSheet.create({
   uploadButton: { width: 100, alignItems: "center", justifyContent: "center" },
   uploadButtonText: {
     color: "#fff",
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "500",
     textAlign: "center",
   },
@@ -947,7 +948,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4,
     shadowRadius: 3,
   },
-  pointDotLabel: { color: "#fff", fontSize: 13, fontWeight: "700" },
+  pointDotLabel: { color: "#fff", fontSize: FontSize.body, fontWeight: "700" },
   instructionBanner: {
     position: "absolute",
     top: 24,
@@ -961,13 +962,13 @@ const styles = StyleSheet.create({
   },
   instructionText: {
     color: "#fff",
-    fontSize: 14,
+    fontSize: FontSize.callout,
     textAlign: "center",
     fontWeight: "600",
   },
   instructionSub: {
     color: "rgba(255,255,255,0.6)",
-    fontSize: 13,
+    fontSize: FontSize.body,
     textAlign: "center",
   },
   reviewFooter: {
@@ -989,7 +990,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   buttonDisabled: { opacity: 0.4 },
-  buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+  buttonText: { color: "#fff", fontSize: FontSize.label, fontWeight: "600" },
   secondaryButton: {
     flex: 1,
     backgroundColor: "rgba(255,255,255,0.2)",
@@ -999,5 +1000,5 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.4)",
   },
-  secondaryButtonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+  secondaryButtonText: { color: "#fff", fontSize: FontSize.label, fontWeight: "600" },
 });

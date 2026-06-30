@@ -1,4 +1,5 @@
 import { Colors } from "@/constants/Colors";
+import { FontSize } from "@/constants/Typography";
 import { router, useLocalSearchParams } from "expo-router";
 import { useMemo, useRef, useState } from "react";
 import {
@@ -299,7 +300,7 @@ const styles = StyleSheet.create({
   },
   fallbackText: {
     color: Colors.text.tertiary,
-    fontSize: 14,
+    fontSize: FontSize.callout,
     textAlign: "center",
     marginTop: 40,
   },
@@ -311,7 +312,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(220,38,38,0.8)",
     padding: 10,
   },
-  errorBannerText: { color: Colors.white, fontSize: 12, textAlign: "center" },
+  errorBannerText: { color: Colors.white, fontSize: FontSize.small, textAlign: "center" },
   backButton: {
     position: "absolute",
     top: 16,
@@ -323,7 +324,7 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
     borderColor: "rgba(255,255,255,0.2)",
   },
-  backButtonText: { color: Colors.white, fontSize: 14, fontWeight: "600" },
+  backButtonText: { color: Colors.white, fontSize: FontSize.callout, fontWeight: "600" },
   renderBadge: {
     position: "absolute",
     top: 16,
@@ -333,7 +334,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 20,
   },
-  renderBadgeText: { color: Colors.white, fontSize: 13, fontWeight: "600" },
+  renderBadgeText: { color: Colors.white, fontSize: FontSize.body, fontWeight: "600" },
   counter: {
     position: "absolute",
     bottom: 16,
@@ -343,7 +344,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 20,
   },
-  counterText: { color: Colors.white, fontSize: 13, fontWeight: "700" },
+  counterText: { color: Colors.white, fontSize: FontSize.body, fontWeight: "700" },
   dots: {
     position: "absolute",
     bottom: 20,
@@ -383,7 +384,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#333",
   },
-  thumbFallbackText: { color: Colors.text.tertiary, fontSize: 20, fontWeight: "700" },
+  thumbFallbackText: { color: Colors.text.tertiary, fontSize: FontSize.title, fontWeight: "700" },
   thumbIndexBadge: {
     position: "absolute",
     top: 3,
@@ -396,7 +397,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  thumbIndexText: { color: Colors.white, fontSize: 11, fontWeight: "700" },
+  thumbIndexText: { color: Colors.white, fontSize: FontSize.caption, fontWeight: "700" },
   panel: {
     backgroundColor: Colors.surface,
     padding: 20,
@@ -405,11 +406,11 @@ const styles = StyleSheet.create({
     borderTopWidth: 0.5,
     borderTopColor: Colors.border,
   },
-  panelTitle: { fontSize: 20, fontWeight: "700", color: Colors.text.primary },
+  panelTitle: { fontSize: FontSize.title, fontWeight: "700", color: Colors.text.primary },
   panelSubtitle: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     color: Colors.text.secondary,
-    lineHeight: 18,
+    lineHeight: 20,
     marginTop: -6,
   },
   primaryActions: { marginTop: 4 },
@@ -419,7 +420,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
   },
-  primaryButtonText: { color: Colors.white, fontSize: 17, fontWeight: "700" },
+  primaryButtonText: { color: Colors.white, fontSize: FontSize.subhead, fontWeight: "700" },
   secondaryActions: { flexDirection: "row", gap: 10 },
   secondaryButton: {
     flex: 1,
@@ -431,17 +432,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  secondaryButtonIcon: { fontSize: 18, color: Colors.text.primary },
+  secondaryButtonIcon: { fontSize: FontSize.heading, color: Colors.text.primary },
   secondaryButtonText: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "600",
     color: Colors.text.secondary,
   },
   disclaimer: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     color: Colors.text.tertiary,
     textAlign: "center",
-    lineHeight: 16,
+    lineHeight: 18,
     marginTop: 4,
   },
 });

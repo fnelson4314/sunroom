@@ -1,4 +1,5 @@
 import { Colors } from "@/constants/Colors";
+import { FontSize } from "@/constants/Typography";
 import { getSession } from "@/services/api";
 import * as Print from "expo-print";
 import { router, useLocalSearchParams } from "expo-router";
@@ -750,7 +751,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#FAFAF8",
     gap: 12,
   },
-  loadingText: { fontSize: 14, color: Colors.text.secondary },
+  loadingText: { fontSize: FontSize.callout, color: Colors.text.secondary },
   scroll: { flex: 1 },
   scrollContent: { padding: 24 },
 
@@ -766,25 +767,25 @@ const styles = StyleSheet.create({
     marginBottom: 22,
   },
   company: {
-    fontSize: 24,
+    fontSize: FontSize.largeTitle,
     fontWeight: "800",
     color: Colors.white,
     letterSpacing: 1,
   },
   tagline: {
-    fontSize: 11,
+    fontSize: FontSize.caption,
     color: "rgba(255,255,255,0.85)",
     letterSpacing: 1.4,
     marginTop: 4,
   },
   metaRight: { alignItems: "flex-end", gap: 2 },
   quoteNumber: {
-    fontSize: 16,
+    fontSize: FontSize.label,
     fontWeight: "700",
     color: Colors.white,
     letterSpacing: 0.5,
   },
-  metaDate: { fontSize: 12, color: "rgba(255,255,255,0.85)" },
+  metaDate: { fontSize: FontSize.small, color: "rgba(255,255,255,0.85)" },
 
   twoCol: { flexDirection: "row", gap: 20, marginBottom: 20 },
   halfCol: { flex: 1, gap: 6 },
@@ -801,50 +802,50 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
   },
   finTerm: {
-    fontSize: 10,
+    fontSize: FontSize.tiny,
     fontWeight: "700",
     letterSpacing: 0.5,
     color: Colors.primary,
   },
   finAmt: {
-    fontSize: 22,
+    fontSize: FontSize.sectionTitle,
     fontWeight: "800",
     color: Colors.text.primary,
     marginTop: 6,
     marginBottom: 6,
   },
-  finAmtUnit: { fontSize: 11, fontWeight: "600", color: Colors.text.secondary },
+  finAmtUnit: { fontSize: FontSize.caption, fontWeight: "600", color: Colors.text.secondary },
   finHeadline: {
-    fontSize: 11,
+    fontSize: FontSize.caption,
     fontWeight: "600",
     color: Colors.text.primary,
-    lineHeight: 16,
+    lineHeight: 18,
   },
-  finFeat: { fontSize: 11, color: Colors.text.secondary, lineHeight: 18 },
+  finFeat: { fontSize: FontSize.caption, color: Colors.text.secondary, lineHeight: 20 },
   finNote: {
-    fontSize: 10,
+    fontSize: FontSize.tiny,
     color: Colors.text.tertiary,
-    lineHeight: 14,
+    lineHeight: 16,
     marginTop: 10,
   },
   sectionLabel: {
-    fontSize: 11,
+    fontSize: FontSize.caption,
     fontWeight: "700",
     letterSpacing: 1.8,
     color: "#B0ADA6",
     marginBottom: 8,
   },
   customerName: {
-    fontSize: 20,
+    fontSize: FontSize.title,
     fontWeight: "700",
     color: "#1C1C1E",
     letterSpacing: -0.3,
   },
-  customerEmail: { fontSize: 13, color: "#8A8880" },
+  customerEmail: { fontSize: FontSize.body, color: "#8A8880" },
   specsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   specItem: { minWidth: "45%", gap: 1 },
-  specLabel: { fontSize: 11, letterSpacing: 1.2, color: "#C0BCB5" },
-  specValue: { fontSize: 14, fontWeight: "600", color: "#1C1C1E" },
+  specLabel: { fontSize: FontSize.caption, letterSpacing: 1.2, color: "#C0BCB5" },
+  specValue: { fontSize: FontSize.callout, fontWeight: "600", color: "#1C1C1E" },
 
   divider: { height: 1, backgroundColor: "#E8E4DC", marginVertical: 20 },
 
@@ -858,7 +859,7 @@ const styles = StyleSheet.create({
   },
   photoCard: { flex: 1, gap: 5 },
   photoLabel: {
-    fontSize: 11,
+    fontSize: FontSize.caption,
     fontWeight: "700",
     letterSpacing: 1.5,
     color: "#B0ADA6",
@@ -878,7 +879,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   photoFallbackText: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     color: "#A8A49C",
     fontWeight: "600",
   },
@@ -899,7 +900,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#E8E4DC",
   },
   priceHeaderText: {
-    fontSize: 11,
+    fontSize: FontSize.caption,
     fontWeight: "700",
     letterSpacing: 1.5,
     color: "#B0ADA6",
@@ -912,9 +913,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0.5,
     borderBottomColor: "#F2F0EB",
   },
-  priceRowName: { fontSize: 13, fontWeight: "500", color: "#1C1C1E" },
-  priceRowDetail: { fontSize: 12, color: "#A8A49C", lineHeight: 16 },
-  priceRowValue: { fontSize: 13, fontWeight: "600", color: "#1C1C1E" },
+  priceRowName: { fontSize: FontSize.body, fontWeight: "500", color: "#1C1C1E" },
+  priceRowDetail: { fontSize: FontSize.small, color: "#A8A49C", lineHeight: 18 },
+  priceRowValue: { fontSize: FontSize.body, fontWeight: "600", color: "#1C1C1E" },
   totalRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -925,9 +926,9 @@ const styles = StyleSheet.create({
     borderTopWidth: 1.5,
     borderTopColor: "#1C1C1E",
   },
-  totalLabel: { fontSize: 13, fontWeight: "700", color: "#1C1C1E" },
+  totalLabel: { fontSize: FontSize.body, fontWeight: "700", color: "#1C1C1E" },
   totalValue: {
-    fontSize: 22,
+    fontSize: FontSize.sectionTitle,
     fontWeight: "800",
     color: "#1C6B45",
     letterSpacing: -0.5,
@@ -940,7 +941,7 @@ const styles = StyleSheet.create({
     borderLeftColor: "#C8C4BA",
     padding: 14,
   },
-  notesText: { fontSize: 13, color: "#5A5854", lineHeight: 19 },
+  notesText: { fontSize: FontSize.body, color: "#5A5854", lineHeight: 21 },
 
   validityBadge: {
     alignSelf: "center",
@@ -952,16 +953,16 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   validityText: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     color: "#8A8880",
     fontWeight: "500",
     letterSpacing: 0.3,
   },
   disclaimer: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     color: "#C0BCB5",
     textAlign: "center",
-    lineHeight: 15,
+    lineHeight: 17,
   },
 
   footer: {
@@ -980,7 +981,7 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: {
     color: "#fff",
-    fontSize: 15,
+    fontSize: FontSize.label,
     fontWeight: "700",
     letterSpacing: 0.2,
   },
@@ -994,5 +995,5 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#E8E4DC",
   },
-  secondaryButtonText: { fontSize: 12, fontWeight: "600", color: "#5A5854" },
+  secondaryButtonText: { fontSize: FontSize.small, fontWeight: "600", color: "#5A5854" },
 });

@@ -1,4 +1,5 @@
 import { Colors } from "@/constants/Colors";
+import { FontSize } from "@/constants/Typography";
 import { router } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
@@ -32,14 +33,14 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   title: {
-    fontSize: 20,
+    fontSize: FontSize.title,
     fontWeight: "700",
     color: Colors.text.primary,
   },
   body: {
-    fontSize: 15,
+    fontSize: FontSize.label,
     color: Colors.text.secondary,
-    lineHeight: 22,
+    lineHeight: 24,
   },
   button: {
     backgroundColor: Colors.primary,
@@ -49,7 +50,7 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: Colors.white,
-    fontSize: 16,
+    fontSize: FontSize.label,
     fontWeight: "600",
   },
 });

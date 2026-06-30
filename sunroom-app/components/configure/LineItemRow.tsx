@@ -1,4 +1,5 @@
 import { Colors } from "@/constants/Colors";
+import { FontSize } from "@/constants/Typography";
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
@@ -218,21 +219,21 @@ const styles = StyleSheet.create({
   },
   checkmark: {
     color: Colors.white,
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "700",
-    lineHeight: 16,
+    lineHeight: 18,
   },
   nameBlock: { flex: 1, gap: 2 },
   name: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "500",
     color: Colors.text.primary,
-    lineHeight: 18,
+    lineHeight: 20,
   },
   nameChecked: { color: Colors.primary, fontWeight: "600" },
-  unitPrice: { fontSize: 11, color: Colors.text.tertiary },
+  unitPrice: { fontSize: FontSize.caption, color: Colors.text.tertiary },
   lineTotal: {
-    fontSize: 14,
+    fontSize: FontSize.callout,
     fontWeight: "700",
     color: Colors.status.complete,
     flexShrink: 0,
@@ -248,7 +249,7 @@ const styles = StyleSheet.create({
     borderTopColor: Colors.border,
   },
   quantityLabel: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     color: Colors.text.secondary,
     fontWeight: "500",
   },
@@ -259,11 +260,11 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    fontSize: 14,
+    fontSize: FontSize.callout,
     fontWeight: "600",
     color: Colors.text.primary,
     minWidth: 72,
     textAlign: "center",
   },
-  unitLabel: { fontSize: 12, color: Colors.text.secondary },
+  unitLabel: { fontSize: FontSize.small, color: Colors.text.secondary },
 });

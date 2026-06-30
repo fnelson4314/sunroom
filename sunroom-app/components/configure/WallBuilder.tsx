@@ -1,4 +1,5 @@
 import { Colors } from "@/constants/Colors";
+import { FontSize } from "@/constants/Typography";
 import type {
   DoorStyle,
   GableGlassConfig,
@@ -189,7 +190,7 @@ function SolidStylePicker({
         >
           <Text
             style={{
-              fontSize: 11,
+              fontSize: FontSize.caption,
               fontWeight: "600",
               color: value === opt.v ? "#6b4228" : Colors.text.secondary,
             }}
@@ -652,7 +653,7 @@ function HeightOverrideBlock({
             <Text style={styles.addOnCheckMark}>✓</Text>
           )}
         </View>
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, gap: 8 }}>
           <Text style={styles.materialsTitle}>
             Override heights for this unit
           </Text>
@@ -1948,7 +1949,7 @@ export default function WallBuilder({
                         <View key={i} style={{ alignItems: "center", gap: 2 }}>
                           <Text
                             style={{
-                              fontSize: 12,
+                              fontSize: FontSize.small,
                               color: Colors.text.tertiary,
                             }}
                           >
@@ -2216,15 +2217,15 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.border,
   },
   sectionLabel: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     fontWeight: "700",
     color: Colors.text.primary,
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
-  sectionHint: { fontSize: 11, color: Colors.text.tertiary },
+  sectionHint: { fontSize: FontSize.caption, color: Colors.text.tertiary },
   subLabel: {
-    fontSize: 11,
+    fontSize: FontSize.caption,
     fontWeight: "700",
     color: Colors.text.secondary,
     textTransform: "uppercase",
@@ -2245,12 +2246,12 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primaryTint,
   },
   wallTypeChipText: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     fontWeight: "600",
     color: Colors.text.primary,
   },
   wallTypeChipTextSel: { color: Colors.primary },
-  wallTypeChipPrice: { fontSize: 12, color: Colors.text.tertiary },
+  wallTypeChipPrice: { fontSize: FontSize.small, color: Colors.text.tertiary },
   colorPickerRow: { flexDirection: "row", gap: 10 },
   colorSwatch: {
     flex: 1,
@@ -2271,12 +2272,12 @@ const styles = StyleSheet.create({
   colorDot: { width: 22, height: 22, borderRadius: 11, borderWidth: 2 },
   colorSwatchLabel: {
     flex: 1,
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "600",
     color: Colors.text.secondary,
   },
   colorSwatchLabelSel: { color: Colors.primary },
-  colorSwatchCheck: { fontSize: 13, fontWeight: "700", color: Colors.primary },
+  colorSwatchCheck: { fontSize: FontSize.body, fontWeight: "700", color: Colors.primary },
   tabsRow: { flexDirection: "row", gap: 8 },
   tab: {
     flex: 1,
@@ -2288,12 +2289,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   tabActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  tabText: { fontSize: 14, fontWeight: "600", color: Colors.text.secondary },
+  tabText: { fontSize: FontSize.callout, fontWeight: "600", color: Colors.text.secondary },
   tabTextActive: { color: "#fff" },
   dimsRow: { flexDirection: "row", gap: 10 },
   dimField: { flex: 1, gap: 4 },
   dimLabel: {
-    fontSize: 11,
+    fontSize: FontSize.caption,
     fontWeight: "600",
     color: Colors.text.tertiary,
     textTransform: "uppercase",
@@ -2305,7 +2306,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     padding: 10,
-    fontSize: 16,
+    fontSize: FontSize.label,
     fontWeight: "600",
     color: Colors.text.primary,
     textAlign: "center",
@@ -2314,7 +2315,7 @@ const styles = StyleSheet.create({
   dimInputAccentKnee: { borderColor: "#b06040", borderWidth: 2 },
   dimInputRequired: { borderColor: "#e03030", borderWidth: 2 },
   dimConvert: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     color: Colors.text.tertiary,
     textAlign: "center",
     fontStyle: "italic",
@@ -2342,8 +2343,8 @@ const styles = StyleSheet.create({
   sectionDivider: { height: 5, flexShrink: 0 },
   sectionSplit: { flexDirection: "row", overflow: "hidden" },
   sectionHalf: { flex: 1 },
-  unitWidthLbl: { fontSize: 11, color: Colors.text.tertiary },
-  tapHint: { fontSize: 12, color: Colors.text.tertiary, fontStyle: "italic" },
+  unitWidthLbl: { fontSize: FontSize.caption, color: Colors.text.tertiary },
+  tapHint: { fontSize: FontSize.small, color: Colors.text.tertiary, fontStyle: "italic" },
   autoChipsBlock: {
     paddingHorizontal: 14,
     paddingBottom: 12,
@@ -2353,7 +2354,7 @@ const styles = StyleSheet.create({
     paddingTop: 10,
   },
   autoChipsLabel: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     fontWeight: "700",
     color: Colors.primary,
     textTransform: "uppercase",
@@ -2368,7 +2369,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.primary,
   },
-  autoChipText: { fontSize: 11, fontWeight: "600", color: Colors.primary },
+  autoChipText: { fontSize: FontSize.caption, fontWeight: "600", color: Colors.primary },
   collapsibleHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -2376,7 +2377,7 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   collapsibleBody: { borderTopWidth: 0.5, borderTopColor: Colors.border },
-  chevron: { fontSize: 11, color: Colors.text.tertiary },
+  chevron: { fontSize: FontSize.caption, color: Colors.text.tertiary },
   splitRow: { flexDirection: "row", gap: 8 },
   splitToggle: {
     flex: 1,
@@ -2391,7 +2392,7 @@ const styles = StyleSheet.create({
   splitToggleActive: { borderColor: "#d4a800", backgroundColor: "#fffbe6" },
   splitToggleActiveKnee: { borderColor: "#b06040", backgroundColor: "#fdf2ee" },
   splitToggleText: {
-    fontSize: 11,
+    fontSize: FontSize.caption,
     fontWeight: "600",
     color: Colors.text.secondary,
   },
@@ -2415,7 +2416,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primaryTint,
   },
   gableToggleText: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     fontWeight: "600",
     color: Colors.text.secondary,
   },
@@ -2434,7 +2435,7 @@ const styles = StyleSheet.create({
     padding: 10,
     alignItems: "center",
   },
-  priceNoteText: { fontSize: 12, fontWeight: "600", color: Colors.primary },
+  priceNoteText: { fontSize: FontSize.small, fontWeight: "600", color: Colors.primary },
   toggleRow: { flexDirection: "row", gap: 6 },
   toggleBtn: {
     flex: 1,
@@ -2447,7 +2448,7 @@ const styles = StyleSheet.create({
   },
   toggleBtnActive: { borderColor: "#e8621a", backgroundColor: "#FFF4EE" },
   toggleBtnText: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "600",
     color: Colors.text.secondary,
   },
@@ -2469,14 +2470,14 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.background,
   },
   unitsBtnText: {
-    fontSize: 22,
+    fontSize: FontSize.sectionTitle,
     fontWeight: "400",
     color: Colors.text.secondary,
   },
   unitsCount: {
     flex: 1,
     textAlign: "center",
-    fontSize: 16,
+    fontSize: FontSize.label,
     fontWeight: "700",
     color: Colors.text.primary,
   },
@@ -2494,12 +2495,12 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   addOnSectionTitle: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "700",
     color: Colors.text.primary,
   },
-  addOnSectionSub: { fontSize: 11, color: Colors.text.tertiary, marginTop: 2 },
-  addOnChevron: { fontSize: 11, color: Colors.text.tertiary },
+  addOnSectionSub: { fontSize: FontSize.caption, color: Colors.text.tertiary, marginTop: 2 },
+  addOnChevron: { fontSize: FontSize.caption, color: Colors.text.tertiary },
   addOnList: { borderTopWidth: 1, borderTopColor: Colors.border },
   addOnRow: {
     flexDirection: "row",
@@ -2525,10 +2526,10 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     borderColor: Colors.primary,
   },
-  addOnCheckMark: { fontSize: 12, fontWeight: "700", color: "#fff" },
+  addOnCheckMark: { fontSize: FontSize.small, fontWeight: "700", color: "#fff" },
   addOnRowInfo: { flex: 1, gap: 1 },
-  addOnRowName: { fontSize: 12, fontWeight: "500", color: Colors.text.primary },
-  addOnRowPrice: { fontSize: 12, color: Colors.text.tertiary },
+  addOnRowName: { fontSize: FontSize.small, fontWeight: "500", color: Colors.text.primary },
+  addOnRowPrice: { fontSize: FontSize.small, color: Colors.text.tertiary },
   addOnQtyInput: {
     width: 60,
     backgroundColor: Colors.background,
@@ -2536,20 +2537,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     padding: 6,
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "600",
     color: Colors.text.primary,
     textAlign: "center",
   },
-  addOnRowTotal: { fontSize: 12, fontWeight: "700", color: Colors.primary },
+  addOnRowTotal: { fontSize: FontSize.small, fontWeight: "700", color: Colors.primary },
   addOnInputRow: {
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
     gap: 6,
   },
-  addOnSep: { fontSize: 13, fontWeight: "600", color: Colors.text.secondary },
-  addOnCalc: { fontSize: 11, color: Colors.text.tertiary, fontStyle: "italic" },
+  addOnSep: { fontSize: FontSize.body, fontWeight: "600", color: Colors.text.secondary },
+  addOnCalc: { fontSize: FontSize.caption, color: Colors.text.tertiary, fontStyle: "italic" },
   backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)" },
   sheet: {
     backgroundColor: Colors.surface,
@@ -2571,15 +2572,15 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
-  sheetTitle: { fontSize: 16, fontWeight: "700", color: Colors.text.primary },
-  sheetSub: { fontSize: 12, color: Colors.text.tertiary, marginTop: 2 },
+  sheetTitle: { fontSize: FontSize.label, fontWeight: "700", color: Colors.text.primary },
+  sheetSub: { fontSize: FontSize.small, color: Colors.text.tertiary, marginTop: 2 },
   doneBtn: {
     backgroundColor: Colors.primary,
     paddingHorizontal: 18,
     paddingVertical: 8,
     borderRadius: 8,
   },
-  doneBtnText: { fontSize: 14, fontWeight: "600", color: "#fff" },
+  doneBtnText: { fontSize: FontSize.callout, fontWeight: "600", color: "#fff" },
   sheetBody: { padding: 14, paddingBottom: 36, gap: 16 },
   materialsBlock: {
     backgroundColor: Colors.background,
@@ -2590,15 +2591,15 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   materialsTitle: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "700",
     color: Colors.text.primary,
   },
-  materialsSub: { fontSize: 11, color: Colors.text.tertiary, marginTop: -4 },
+  materialsSub: { fontSize: FontSize.caption, color: Colors.text.tertiary, marginTop: -4 },
   materialsRow: { flexDirection: "row", gap: 16 },
   materialToggle: { flex: 1, gap: 6 },
   materialToggleLabel: {
-    fontSize: 12,
+    fontSize: FontSize.small,
     fontWeight: "600",
     color: Colors.text.secondary,
   },
@@ -2610,14 +2611,14 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 8,
   },
-  overrideHint: { fontSize: 12, color: Colors.text.tertiary, marginTop: -4 },
+  overrideHint: { fontSize: FontSize.small, color: Colors.text.tertiary, marginTop: -4 },
   overrideInput: {
     backgroundColor: Colors.surface,
     borderRadius: 7,
     borderWidth: 1.5,
     borderColor: "#d4a800",
     padding: 8,
-    fontSize: 14,
+    fontSize: FontSize.callout,
     fontWeight: "600",
     color: Colors.text.primary,
     textAlign: "center",
@@ -2648,19 +2649,19 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primaryTint,
   },
   doorStyleBtnText: {
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "600",
     color: Colors.text.secondary,
   },
   doorStyleBtnTextActive: { color: Colors.primary },
   doorStyleSplitBadge: {
-    fontSize: 9,
+    fontSize: FontSize.micro,
     fontWeight: "700",
     color: Colors.text.tertiary,
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
-  gridTitle: { fontSize: 13, fontWeight: "700", color: Colors.text.primary },
+  gridTitle: { fontSize: FontSize.body, fontWeight: "700", color: Colors.text.primary },
   modalGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   modalOption: {
     width: "30%",
@@ -2686,11 +2687,11 @@ const styles = StyleSheet.create({
   previewSection: { alignItems: "center", justifyContent: "center" },
   previewDivider: { height: 4, backgroundColor: FRAME_COLOR, flexShrink: 0 },
   modalOptionLabel: {
-    fontSize: 11,
+    fontSize: FontSize.caption,
     fontWeight: "500",
     color: Colors.text.secondary,
     textAlign: "center",
-    lineHeight: 15,
+    lineHeight: 17,
   },
   modalOptionLabelSel: { color: "#e8621a", fontWeight: "700" },
   checkBadge: {
@@ -2704,7 +2705,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  checkBadgeText: { fontSize: 11, fontWeight: "700", color: "#fff" },
+  checkBadgeText: { fontSize: FontSize.caption, fontWeight: "700", color: "#fff" },
   unitWidthInput: {
     width: 52,
     textAlign: "center",
@@ -2713,7 +2714,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     padding: 6,
-    fontSize: 13,
+    fontSize: FontSize.body,
     fontWeight: "600",
     color: Colors.text.primary,
   },
