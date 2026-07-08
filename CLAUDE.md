@@ -11,6 +11,9 @@ This repo has three sub-projects:
 
 ## Dev Commands
 
+Four processes run in separate terminals: API, Celery worker, 3D renderer, Expo.
+Redis runs as an automatic Windows **service** (not a terminal).
+
 ### Frontend (`sunroom-app/`)
 ```bash
 npm start          # Expo dev server
@@ -25,11 +28,20 @@ npm run web        # Web browser
 python -m uvicorn app.main:app --reload
 
 # Celery worker (required for AI generation)
-celery -A app.worker worker --loglevel=info
+# NOTE: on Windows use --pool=solo (prefork doesn't work); the module is
+# app.worker.celery_app. Celery does NOT autoreload — restart it after editing
+# tasks.py / prompt_builder.py / routers.
+celery -A app.worker.celery_app worker --loglevel=info --pool=solo
 
 # 3D renderer service
-node sunroom-3d/server.js
+node --watch sunroom-3d/server.js   # --watch auto-restarts on server.js edits
 ```
+
+> **Restart rule:** `scene.html` is reloaded on every render (edits apply
+> immediately), but `server.js` is loaded once at process start. Editing
+> `server.js` (e.g. the PnP dimension logic) requires restarting the renderer —
+> otherwise the PnP camera and the drawn geometry disagree and the structure
+> tilts/misaligns. Run with `node --watch` so this happens automatically.
 
 No formal test suite exists. Manual API testing hits `http://localhost:8000` directly.
 

@@ -456,7 +456,7 @@ export default function CameraScreen() {
         box_y2: String(box_y2),
         wall_corners: JSON.stringify(normalizedCorners),
         preset_wall_count: String(wallCount),
-        preset_wall_combo: wallCombo ?? "",
+        preset_wall_combo: wallCount === 1 ? "" : (wallCombo ?? ""),
         preset_roof_style: isUnderExisting ? "under_existing" : "",
         preset_existing_roof: isUnderExisting ? existingRoof : "",
       },
@@ -486,10 +486,9 @@ export default function CameraScreen() {
                 styles.wallCountBtn,
                 wallCount === n && styles.wallCountBtnActive,
               ]}
-              onPress={() => {
-                setWallCount(n);
-                setWallCombo(n === 1 ? null : "BC");
-              }}
+              // Keep the AB/BC choice across wall-count changes — the combo is
+              // remembered even while 1-wall hides it (1-wall sends no combo).
+              onPress={() => setWallCount(n)}
             >
               <Text
                 style={[

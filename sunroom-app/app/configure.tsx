@@ -82,6 +82,14 @@ export default function ConfigureScreen() {
   // always lands on the last wall the user was editing.
   const [activeWallId, setActiveWallId] = useState<"A" | "B" | "C">("B");
 
+  // Whenever the set of designed walls changes (wall count or AB/BC combo),
+  // land on the left-most wall: A for 3-wall or 2-wall AB, B for 2-wall BC/1-wall.
+  const wallIdSignature = configure.state.walls.map((w) => w.id).join("");
+  useEffect(() => {
+    const first = configure.state.walls[0]?.id;
+    if (first) setActiveWallId(first);
+  }, [wallIdSignature]);
+
   // Intercept the header back button on step 1 and confirm before discarding.
   // NOTE: react-native-web's Alert.alert ignores custom buttons (it only shows a
   // single OK), so on web the "Discard" callback never fired and Back appeared
@@ -158,8 +166,9 @@ export default function ConfigureScreen() {
     const count = parseInt(params.preset_wall_count ?? "");
     if (count === 1 || count === 2 || count === 3) {
       configure.setNumberOfWalls(count);
+      // The combo picks which two walls render — applies to 2- AND 3-wall rooms.
       if (
-        count === 2 &&
+        (count === 2 || count === 3) &&
         (params.preset_wall_combo === "AB" || params.preset_wall_combo === "BC")
       ) {
         configure.setWallCombo(params.preset_wall_combo);
@@ -618,11 +627,14 @@ export default function ConfigureScreen() {
                   ))}
                 </View>
 
-                {configure.state.numberOfWalls === 2 && (
+                {(configure.state.numberOfWalls === 2 ||
+                  configure.state.numberOfWalls === 3) && (
                   <View style={[styles.fieldBlock, { marginTop: 12 }]}>
-                    <Text style={styles.fieldLabel}>Wall Position</Text>
+                    <Text style={styles.fieldLabel}>Walls to Render</Text>
                     <Text style={styles.fieldHint}>
-                      Which two walls of the sunroom
+                      {configure.state.numberOfWalls === 3
+                        ? "All 3 walls are priced; choose which 2 the camera sees"
+                        : "Which two walls of the sunroom"}
                     </Text>
                     <View style={styles.optionGrid}>
                       {(["AB", "BC"] as const).map((combo) => (

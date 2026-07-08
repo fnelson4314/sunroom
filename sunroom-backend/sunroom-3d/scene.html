@@ -243,7 +243,14 @@
         return g;
       }
 
-      function buildWall(wall, fc, roofStyle, shHex, isGable, includeGableWings = true) {
+      // `mirrored` = this wall is drawn with rotation.y=PI + scale.x=-1 (the FRONT
+      // wall slot). That composite is a pure z-flip: local (x,y,z) → world
+      // (x, y, wallW_B - z), so local +z points AWAY from the camera and local -z
+      // points TOWARD it — the opposite of the un-mirrored side wall. Anything
+      // whose correctness depends on which side of the glass it sits on (the dark
+      // gable backing) must consult this. Frame members avoid it by being centred
+      // on the glass plane and deeper than it, so they stand proud on both faces.
+      function buildWall(wall, fc, roofStyle, shHex, isGable, includeGableWings = true, mirrored = false) {
         const g = new THREE.Group();
         const fw = wall.frame_width_in / 12,
           wallW = wall.width_in / 12,
@@ -270,7 +277,7 @@
         }
         g.add(frameBorder(wallW, wallH, 0.12, fw, fmat));
         if (isGable && roofStyle === "gable")
-          g.add(buildGable(wallW, wallH, fw, shHex, wall.gable_glass, fc, dividers));
+          g.add(buildGable(wallW, wallH, fw, shHex, wall.gable_glass, fc, dividers, mirrored));
 
         // Under-existing: wall panels rise to the eave (wallH = the header). Above
         // that, the area up to the EXISTING roof is filled — drawn tall and clipped
@@ -293,20 +300,26 @@
             const fillMat = isSolid ? solidMat(0xdcd0be) : glassMat(0x2b4754, 0.8);
             g.add(box(wallW - fw * 2, fillH, Df, fillMat, wallW / 2, wallH + fillH / 2, 0));
             // Header beam at the eave (separates the wall panels from the accent above).
-            g.add(box(wallW, fw * 1.4, Df * 2, fmat, wallW / 2, wallH, 0.02));
+            g.add(box(wallW, fw * 1.4, 0.16, fmat, wallW / 2, wallH, 0));
           } else {
             // Walls-only: seamless glass continuation, no accent, no header beam here.
             g.add(box(wallW - fw * 2, fillH, Df, glassMat(0x2b4754, 0.8), wallW / 2, wallH + fillH / 2, 0));
           }
           // Posts continue up through the fill, aligned to the unit dividers.
+          // CENTRED on the glass plane (z=0), not pushed to +z: the FRONT wall is
+          // mirrored (rotation.y=PI + scale.x=-1 ⇒ local +z faces AWAY from the
+          // camera), so a +z offset buried these posts behind the tinted glass —
+          // they read as faint lines instead of frames continuing up from the
+          // units. Centred + deep than the glass, they stand proud on BOTH faces,
+          // so this is correct for the side wall and the front wall alike.
           for (const dx of dividers) {
-            g.add(box(postW, fillH, Df * 1.1, fmat, dx, wallH + fillH / 2, 0.04));
+            g.add(box(postW, fillH, 0.16, fmat, dx, wallH + fillH / 2, 0));
           }
         }
         return g;
       }
 
-      function buildGable(wallW, wallH, fw, shHex, gableGlass, fc, dividers) {
+      function buildGable(wallW, wallH, fw, shHex, gableGlass, fc, dividers, mirrored = false) {
         const g = new THREE.Group();
         const gH = wallH * 0.42,
           peakX = wallW / 2,
@@ -342,12 +355,28 @@
         // Dark backing behind a GLASS gable so it shows a dark interior instead of
         // the roof/sky behind it (the interior occluder box only reaches the wall
         // top; the gable sits above it). Same purpose: no background bleed-through.
+        // MUST sit on the far side of the glass FROM THE CAMERA. Local -z is
+        // "behind" only for the un-mirrored side wall; on the mirrored front wall
+        // (AB combo, where B carries the gable) the z-flip puts local -z in FRONT,
+        // so a fixed -0.2 planted this opaque plate 0.25ft toward the camera and it
+        // depth-tested over the gable as a black triangle. Offset away from the
+        // face along whichever local direction actually points away from the camera.
         if (isGlass) {
           const gableBack = new THREE.Mesh(
             new THREE.ShapeGeometry(shape),
-            new THREE.MeshBasicMaterial({ color: 0x171c1f }),
+            // DoubleSide is REQUIRED, not cosmetic: the front wall is mirrored
+            // (scale.x=-1), which flips the winding, so a default FrontSide plane
+            // is backface-culled there and the backing vanishes entirely — the
+            // roof slope and sky bleed through the gable glass. Same reason
+            // shingleMat is DoubleSide.
+            new THREE.MeshBasicMaterial({ color: 0x171c1f, side: THREE.DoubleSide }),
           );
-          gableBack.position.z = -0.2;
+          // And it must sit on the far side of the glass FROM THE CAMERA. Local -z
+          // is "behind" only on the un-mirrored side wall; the mirrored front wall
+          // (AB combo, where B carries the gable) z-flips, so -0.2 there put the
+          // plate 0.25ft TOWARD the camera. Offset away from the face along
+          // whichever local direction actually points away from the camera.
+          gableBack.position.z = 0.05 + (mirrored ? 0.25 : -0.25);
           g.add(gableBack);
         }
 
@@ -374,7 +403,11 @@
           const h = Math.max(0.05, topY - wallH);
           // Match the between-unit POST width (fw*3.0 in buildWall) so each
           // vertical reads as one continuous post from the unit up into the gable.
-          g.add(box(fw * 3.0, h, D * 1.3, fmat, mx, wallH + h / 2, 0.06));
+          // Depth is CENTRED on the gable face plane (z=0.05) and thicker than it,
+          // so the mullion stands proud on both faces. The front wall is mirrored
+          // (local +z faces away from the camera), so a shallow +z offset would
+          // sink these behind the tinted glass — see the same fix in buildWall.
+          g.add(box(fw * 3.0, h, 0.16, fmat, mx, wallH + h / 2, 0.05));
         }
         // (No separate gable sill — the wall's own top frame rail already sits
         // here. A second bar stacked on it made a double-thick band; one rail
@@ -417,12 +450,56 @@
         return g;
       }
 
-      function buildRoof(wallW_B, wallW_C, wallH, roofStyle, shHex, fc) {
+      function buildRoof(wallW_B, wallW_C, wallH, roofStyle, shHex, fc, gableOnFront = false) {
         const g = new THREE.Group(),
           smat = shingleMat(shHex),
           fmat = frameMat(fc),
           OH = 1.0; // ~1 ft roof overhang on every side (eaves + gable rakes)
-        if (roofStyle === "gable") {
+        // AB pair: gable end faces the camera, so the whole gable roof is mirrored
+        // to run front-to-back — ridge along Z (at x=wallW_C/2), gable triangles at
+        // the front (z=wallW_B, over wall B) and house side. Built as explicit quads
+        // (double-sided) so winding never culls a slope.
+        if (roofStyle === "gable" && gableOnFront) {
+          const gH = wallH * 0.42,
+            ridgeX = wallW_C / 2,
+            peakY = wallH + gH,
+            z0 = -OH,
+            z1 = wallW_B + OH;
+          const quad = (a, b, c, d, hex) => {
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute(
+              "position",
+              new THREE.BufferAttribute(
+                new Float32Array([...a, ...b, ...c, ...a, ...c, ...d]),
+                3,
+              ),
+            );
+            geo.computeVertexNormals();
+            const mat = shingleMat(hex);
+            mat.side = THREE.DoubleSide;
+            const m = new THREE.Mesh(geo, mat);
+            m.castShadow = m.receiveShadow = true;
+            return m;
+          };
+          const rA = [ridgeX, peakY, z0],
+            rB = [ridgeX, peakY, z1];
+          // left slope (falls to x=0 side) — shaded; right slope — lit
+          g.add(quad(rA, rB, [-OH, wallH, z1], [-OH, wallH, z0], darken(shHex, 25)));
+          g.add(
+            quad(
+              rA,
+              rB,
+              [wallW_C + OH, wallH, z1],
+              [wallW_C + OH, wallH, z0],
+              shHex,
+            ),
+          );
+          // white fascia boards under the two eaves (run front-to-back along Z)
+          g.add(box(0.4, 0.4, wallW_B + OH * 2, fmat, -OH, wallH - 0.2, wallW_B / 2));
+          g.add(
+            box(0.4, 0.4, wallW_B + OH * 2, fmat, wallW_C + OH, wallH - 0.2, wallW_B / 2),
+          );
+        } else if (roofStyle === "gable") {
           const gH = wallH * 0.42,
             ridgeZ = wallW_B / 2;
           const pLen = Math.sqrt(ridgeZ ** 2 + gH ** 2),
@@ -703,10 +780,35 @@
           );
         });
 
-        const bSpec = walls.find((w) => w.wall_id === "B");
-        const cSpec = walls.find((w) => w.wall_id === "C");
+        // At most TWO walls are drawn (the ones facing the camera); any others are
+        // priced but not rendered. WHICH two is the camera "wall combo": AB draws
+        // walls A+B, BC draws B+C. This is independent of how many walls were
+        // designed (a 3-wall room prices A+B+C but still renders just the AB or BC
+        // pair). bSpec = the left/side wall (X=0, carries the gable when it's B),
+        // cSpec = the front wall (faces the camera).
+        // Fallback for older payloads with no combo: infer it from the wall set
+        // (A present + no C ⇒ AB; otherwise BC).
+        let combo = payload.wallCombo;
+        if (combo !== "AB" && combo !== "BC") {
+          const ids = new Set(walls.map((w) => w.wall_id));
+          combo = ids.has("A") && !ids.has("C") ? "AB" : "BC";
+        }
+        const pick = (id, idx) => walls.find((w) => w.wall_id === id) || walls[idx];
+        let bSpec, cSpec;
+        if (combo === "AB") {
+          bSpec = pick("A", 0);
+          cSpec = pick("B", 1);
+        } else {
+          bSpec = pick("B", 0);
+          cSpec = pick("C", 1);
+        }
         const wallW_B = (bSpec?.width_in || 216) / 12;
         const wallW_C = (cSpec?.width_in || 120) / 12;
+        // The gable end belongs to wall B. In the BC pair (and 3-wall) B is the
+        // side wall (bSpec) so the gable faces sideways — ridge along X. In the AB
+        // pair B is the FRONT wall (cSpec), so the gable faces the camera — the
+        // roof ridge and gable end are mirrored to run front-to-back (along Z).
+        const gableOnFront = !!cSpec && cSpec.wall_id === "B";
         // Use the PnP-fitted height so the structure seats on the patio. Falls
         // back to the configured height if auto-fit wasn't provided.
         let wallH = camera.solvedHeight || (bSpec?.height_in || 96) / 12;
@@ -791,15 +893,19 @@
         // it seats on the concrete when the traced markers sit a bit high.
         sunroom.position.y = -(payload.dropFt || 0);
 
+        // The gable end (isGable) goes on whichever slot holds wall B: the side
+        // wall (bSpec) for BC/3-wall, or the front wall (cSpec) for AB.
         if (bSpec) {
-          const wallB = buildWall(bSpec, fc, roofStyle, shHex, true, includeGableWings);
+          // Side wall: plain rotation, local +z stays on the camera side.
+          const wallB = buildWall(bSpec, fc, roofStyle, shHex, !gableOnFront, includeGableWings, false);
           wallB.rotation.y = -Math.PI / 2;
           wallB.position.set(0, 0, 0);
           sunroom.add(wallB);
         }
 
         if (cSpec) {
-          const wallC = buildWall(cSpec, fc, roofStyle, shHex, false, includeGableWings);
+          // Front wall: rotation.y=PI + scale.x=-1 ⇒ z-flip, so it's `mirrored`.
+          const wallC = buildWall(cSpec, fc, roofStyle, shHex, gableOnFront, includeGableWings, true);
           wallC.rotation.y = Math.PI;
           wallC.scale.x = -1;
           wallC.position.set(0, 0, wallW_B);
@@ -807,7 +913,7 @@
         }
 
         if (!underExisting)
-          sunroom.add(buildRoof(wallW_B, wallW_C, wallH, roofStyle, shHex, fc));
+          sunroom.add(buildRoof(wallW_B, wallW_C, wallH, roofStyle, shHex, fc, gableOnFront));
         sunroom.add(buildShadow(wallW_B, wallW_C));
 
         // ── Opaque dark INTERIOR occluder ──────────────────────────────────────

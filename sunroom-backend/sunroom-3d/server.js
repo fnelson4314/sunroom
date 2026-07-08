@@ -34,12 +34,28 @@ const express = require("express");
 const puppeteer = require("puppeteer");
 const path = require("path");
 const fs = require("fs");
-const { solveCameraAutoHeight, reprojectionError } = require("./pnp");
+const {
+  solveCameraAutoHeight,
+  solveCameraAutoFit,
+  reprojectionError,
+} = require("./pnp");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(express.json({ limit: "20mb" }));
+
+// Keep the renderer ALIVE. Node 22 hard-crashes the whole process on an unhandled
+// promise rejection (and on uncaught exceptions), which drops the in-flight
+// connection — the client sees "connection forcibly closed" and falls back to the
+// slower Python renderer. A dev render service should log and keep serving instead,
+// so one bad render (or a browser hiccup) never kills the server.
+process.on("unhandledRejection", (err) => {
+  console.error("[server] unhandledRejection (ignored, staying up):", err);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[server] uncaughtException (ignored, staying up):", err);
+});
 
 // ─── Shingle colour sampler (JS port of Python version) ───────────────────────
 
@@ -117,9 +133,13 @@ function parseConfig(body) {
       gable_glass: rw.gableGlass ?? null,
     };
   });
+  // Log the received combo verbatim — "MISSING" means the app didn't send it
+  // (stale frontend bundle / old Celery) and the renderer will infer a pair.
   console.log(
     "[server] walls:",
     walls.map((w) => `${w.wall_id}:${w.width_in}in`),
+    "wallCombo:",
+    body.wallCombo || "MISSING (will infer)",
   );
 
   const bWall = walls.find((w) => w.wall_id === "B") ?? walls[0];
@@ -139,14 +159,64 @@ function parseConfig(body) {
 
 // ─── PnP dimensions extractor ─────────────────────────────────────────────────
 
-function getPnPDims(spec) {
-  const bWall = spec.walls.find((w) => w.wall_id === "B");
-  const cWall = spec.walls.find((w) => w.wall_id === "C");
+function getPnPDims(spec, combo) {
+  // Wall dims for a GIVEN combo. AB → side wall A + front wall B; BC → side B +
+  // front C. sideWall sits at X=0 (its width is the depth, wallW_B); frontWall
+  // faces the camera (wallW_C).
+  const w = spec.walls;
+  const pick = (id, idx) => w.find((x) => x.wall_id === id) || w[idx];
+  const sideWall = combo === "AB" ? pick("A", 0) : pick("B", 0);
+  const frontWall = combo === "AB" ? pick("B", 1) : pick("C", 1);
   return {
-    wallW_B: (bWall?.width_in || 216) / 12,
-    wallW_C: (cWall?.width_in || 120) / 12,
-    wallH: (bWall?.height_in || 96) / 12,
+    wallW_B: (sideWall?.width_in || 216) / 12,
+    wallW_C: (frontWall?.width_in || 120) / 12,
+    wallH: (sideWall?.height_in || 96) / 12,
   };
+}
+
+// Resolve WHICH two walls the camera saw + the camera pose, in one step.
+//   1. Explicit combo from the app → trust it, solve once.
+//   2. No combo but the wall set implies it (A without C → AB; no A → BC) →
+//      solve once.
+//   3. Ambiguous (a 3-wall room, A+B+C all present, combo lost — e.g. stale
+//      frontend bundle or an old draft) → GEOMETRIC AUTO-DETECT: solve the
+//      camera under BOTH mappings and keep whichever reprojects the captured
+//      5 points better. The wrong mapping fits visibly worse (e.g. 30px vs
+//      18px on a real capture), so the photo itself tells us the answer.
+function resolvePose(spec, wallCombo, pts, photoW, photoH) {
+  const ids = new Set(spec.walls.map((x) => x.wall_id));
+  let combo = wallCombo === "AB" || wallCombo === "BC" ? wallCombo : null;
+  let how = "explicit";
+  if (!combo) {
+    if (ids.has("A") && !ids.has("C")) {
+      combo = "AB";
+      how = "implied by wall set";
+    } else if (!ids.has("A")) {
+      combo = "BC";
+      how = "implied by wall set";
+    }
+  }
+  if (!combo) {
+    // Ambiguous — try both mappings (configured dims), keep the better fit.
+    const camAB = solveCameraAutoHeight(pts, getPnPDims(spec, "AB"), photoW, photoH);
+    const camBC = solveCameraAutoHeight(pts, getPnPDims(spec, "BC"), photoW, photoH);
+    const errAB = reprojectionError(camAB);
+    const errBC = reprojectionError(camBC);
+    combo = errAB < errBC ? "AB" : "BC";
+    how = `auto-detected (fit AB=${errAB.toFixed(1)}px vs BC=${errBC.toFixed(1)}px)`;
+  }
+  // Final solve for the chosen combo, with footprint auto-fit: if the
+  // CONFIGURED wall widths don't match the structure in the photo, no camera
+  // can align the box — it warps/leans instead. Auto-fit sizes the DRAWN
+  // footprint to the capture (pricing keeps the configured dims).
+  const dims = getPnPDims(spec, combo);
+  const camParams = solveCameraAutoFit(pts, dims, photoW, photoH);
+  if (camParams.fittedDims) {
+    dims.wallW_B = camParams.fittedDims.wallW_B;
+    dims.wallW_C = camParams.fittedDims.wallW_C;
+  }
+  console.log(`[render] combo=${combo} (${how})`);
+  return { combo, dims, camParams };
 }
 
 // ─── Puppeteer pool (single instance, reused across requests) ─────────────────
@@ -187,13 +257,58 @@ async function getBrowser() {
 // ─── Core render function ─────────────────────────────────────────────────────
 
 async function render3D(body) {
-  const { photoBase64, photoW, photoH, pts } = body;
+  const { photoBase64, photoW, photoH } = body;
+  let { pts } = body;
   const spec = parseConfig(body);
-  const dims = getPnPDims(spec);
 
-  // Solve camera, auto-fitting the height so the structure seats on the patio
-  // (the configured height usually doesn't match what the markers imply).
-  const camParams = solveCameraAutoHeight(pts, dims, photoW, photoH);
+  // Under-existing captures trace the existing roofline, and its interior
+  // vertex nearest (in x) to the front-corner GROUND marker is the front
+  // corner's TOP — a free 6th correspondence that pins the corner height.
+  // Without it the pose family is ambiguous exactly there and the drawn
+  // corner droops below the traced one.
+  if (Array.isArray(body.roofline) && body.roofline.length >= 2 && pts?.length === 5) {
+    const cornerX = pts[4][0];
+    let bestV = null;
+    for (const v of body.roofline) {
+      if (!bestV || Math.abs(v[0] - cornerX) < Math.abs(bestV[0] - cornerX)) bestV = v;
+    }
+    if (bestV && Math.abs(bestV[0] - cornerX) < 0.08) {
+      pts = [...pts, bestV];
+      console.log(
+        `[render] corner-top from roofline trace: (${bestV[0].toFixed(3)}, ${bestV[1].toFixed(3)}) — using as 6th solve point`,
+      );
+    }
+  }
+
+  // Resolve which two walls are visible (combo) + solve the camera. When the
+  // combo is missing on an ambiguous 3-wall payload this auto-detects it from
+  // the capture geometry; camera height is auto-fitted so the structure seats
+  // on the patio either way.
+  const { combo, dims, camParams } = resolvePose(spec, body.wallCombo, pts, photoW, photoH);
+
+  // Footprint auto-fit: if the solve adopted photo-implied wall widths, the
+  // DRAWN walls must use them too (scene.html reads the spec widths). Pricing
+  // is untouched — this only affects the render.
+  if (camParams.fittedDims) {
+    const sideWall = combo === "AB"
+      ? spec.walls.find((w) => w.wall_id === "A") || spec.walls[0]
+      : spec.walls.find((w) => w.wall_id === "B") || spec.walls[0];
+    const frontWall = combo === "AB"
+      ? spec.walls.find((w) => w.wall_id === "B") || spec.walls[1]
+      : spec.walls.find((w) => w.wall_id === "C") || spec.walls[1];
+    // Scale the wall frame AND its panel units by the same factor — the units
+    // carry absolute widths from the config, and leaving them unscaled makes
+    // the panels overflow past the resized frame.
+    const rescale = (wall, newWidthIn) => {
+      if (!wall || !wall.width_in) return;
+      const f = newWidthIn / wall.width_in;
+      wall.width_in = newWidthIn;
+      for (const u of wall.units || []) u.width_in *= f;
+    };
+    rescale(sideWall, dims.wallW_B * 12);
+    rescale(frontWall, dims.wallW_C * 12);
+  }
+
   const reproErr = reprojectionError(camParams);
   console.log(`[render] reprojection error: ${reproErr.toFixed(1)}px`);
   console.log("Camera payload:", JSON.stringify(camParams, null, 2));
@@ -237,6 +352,10 @@ async function render3D(body) {
     // walls up to it as a plain glass continuation); true/absent = add a new
     // gable/wing accent above the header. No effect on other roof styles.
     includeGableWings: body.includeGableWings !== false,
+    // Which two walls to draw (AB → A+B, BC → B+C) — the RESOLVED combo (explicit,
+    // implied, or geometrically auto-detected), so scene.html always matches the
+    // camera solve above.
+    wallCombo: combo,
   };
 
   // A nonzero dropFt is the ONLY thing that shifts the structure vertically in
@@ -286,9 +405,11 @@ async function render3D(body) {
 
     // Strip data-URL prefixes → raw base64 strings.
     const strip = (d) => (d ? d.replace(/^data:image\/\w+;base64,/, "") : null);
-    return { composite: strip(result.composite), mask: strip(result.mask) };
+    return { composite: strip(result.composite), mask: strip(result.mask), combo };
   } finally {
-    await page.close();
+    // Closing a page on a browser that already died throws — never let that
+    // rejection escape and crash the process.
+    await page.close().catch(() => {});
   }
 }
 
@@ -308,14 +429,33 @@ app.post("/render", async (req, res) => {
     if (!photoW || !photoH)
       return res.status(400).json({ error: "Need photoW and photoH" });
 
-    const { composite, mask } = await render3D(req.body);
+    // If a render fails because the Puppeteer browser died mid-request, relaunch
+    // a fresh one and try ONCE more before giving up. Otherwise a single browser
+    // crash would fail the whole request and force the Python fallback.
+    let composite, mask, combo;
+    try {
+      ({ composite, mask, combo } = await render3D(req.body));
+    } catch (firstErr) {
+      console.warn(
+        `[render] first attempt failed (${firstErr.message}) — relaunching browser and retrying`,
+      );
+      try {
+        if (browser) await browser.close().catch(() => {});
+      } catch {}
+      browser = null;
+      ({ composite, mask, combo } = await render3D(req.body));
+    }
 
     console.log(
       `[render] completed in ${Date.now() - start}ms ` +
         `(composite ${composite.length}b, mask ${mask ? mask.length + "b" : "none"})`,
     );
-    // JSON: both the composite and the exact structure mask, base64-encoded.
-    res.json({ composite, mask });
+    // JSON: the composite, the exact structure mask, and the RESOLVED wall
+    // combo (explicit / inferred / geometrically auto-detected). The backend
+    // MUST build the AI prompt with this combo � if the prompt describes one
+    // wall pair while the composite shows the other, FLUX repaints a scrambled
+    // patchwork of panels trying to satisfy both.
+    res.json({ composite, mask, combo });
   } catch (err) {
     console.error("[render] error:", err.message);
     res.status(500).json({ error: err.message });

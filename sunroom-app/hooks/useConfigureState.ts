@@ -377,48 +377,59 @@ export function useConfigureState() {
     setState((prev) => ({ ...prev, roofOnlyWallHeightIn: val }));
 
   const setNumberOfWalls = (n: 1 | 2 | 3) => {
-    let walls: WallSelection[] = [];
-    let screenWalls: ScreenWallSelection[] = [];
-    if (n === 1) {
-      walls = [makeWall("B")];
-      screenWalls = [makeScreenWall("B")];
-    } else if (n === 2) {
-      walls = [makeWall("A"), makeWall("B")];
-      screenWalls = [makeScreenWall("A"), makeScreenWall("B")];
-    } else {
-      walls = [makeWall("A"), makeWall("B"), makeWall("C")];
-      screenWalls = [
-        makeScreenWall("A"),
-        makeScreenWall("B"),
-        makeScreenWall("C"),
-      ];
-    }
-    setState((prev) => ({
-      ...prev,
-      numberOfWalls: n,
-      walls,
-      screenRoom: { ...prev.screenRoom, walls: screenWalls },
-      wallCombo: n === 2 ? "AB" : null,
-      projectionDistance: "",
-    }));
+    setState((prev) => {
+      // Changing the wall count must NOT discard the user's AB/BC pick — the
+      // combo only selects which pair renders. 1 wall has no combo. For 2/3 walls
+      // keep whatever was already chosen; only when nothing has been chosen yet
+      // fall back to the historical per-count defaults (2 → AB, 3 → BC).
+      const combo: "AB" | "BC" | null =
+        n === 1 ? null : (prev.wallCombo ?? (n === 2 ? "AB" : "BC"));
+      const ids: Array<"A" | "B" | "C"> =
+        n === 1
+          ? ["B"]
+          : n === 3
+            ? ["A", "B", "C"]
+            : combo === "BC"
+              ? ["B", "C"]
+              : ["A", "B"];
+      return {
+        ...prev,
+        numberOfWalls: n,
+        walls: ids.map((id) => makeWall(id)),
+        screenRoom: {
+          ...prev.screenRoom,
+          walls: ids.map((id) => makeScreenWall(id)),
+        },
+        wallCombo: combo,
+        projectionDistance: "",
+      };
+    });
   };
 
-  const setWallCombo = (combo: "AB" | "BC") => {
-    const walls: WallSelection[] =
-      combo === "AB"
-        ? [makeWall("A"), makeWall("B")]
-        : [makeWall("B"), makeWall("C")];
-    const screenWalls: ScreenWallSelection[] =
-      combo === "AB"
-        ? [makeScreenWall("A"), makeScreenWall("B")]
-        : [makeScreenWall("B"), makeScreenWall("C")];
-    setState((prev) => ({
-      ...prev,
-      wallCombo: combo,
-      walls,
-      screenRoom: { ...prev.screenRoom, walls: screenWalls },
-    }));
-  };
+  // The wall combo selects which TWO walls are rendered (AB → A+B, BC → B+C).
+  // - 2-wall room: the combo also defines which two walls exist, so rebuild them.
+  // - 3-wall room: all three stay designed/priced; the combo only changes the
+  //   rendered pair, so DON'T rebuild the walls (that would drop the third).
+  const setWallCombo = (combo: "AB" | "BC") =>
+    setState((prev) => {
+      if (prev.numberOfWalls === 3) {
+        return { ...prev, wallCombo: combo };
+      }
+      const walls: WallSelection[] =
+        combo === "AB"
+          ? [makeWall("A"), makeWall("B")]
+          : [makeWall("B"), makeWall("C")];
+      const screenWalls: ScreenWallSelection[] =
+        combo === "AB"
+          ? [makeScreenWall("A"), makeScreenWall("B")]
+          : [makeScreenWall("B"), makeScreenWall("C")];
+      return {
+        ...prev,
+        wallCombo: combo,
+        walls,
+        screenRoom: { ...prev.screenRoom, walls: screenWalls },
+      };
+    });
 
   const setProjectionDistance = (val: string) =>
     setState((prev) => ({ ...prev, projectionDistance: val }));
@@ -1459,6 +1470,8 @@ export function useConfigureState() {
       roofStyle: effectiveRoofStyle,
       roofOnlySubStyle: state.roofOnlySubStyle,
       underExistingShape: state.underExistingShape,
+      // Which two walls to render (AB → A+B, BC → B+C); all designed walls priced.
+      wallCombo: state.wallCombo ?? "",
       // Stringified for the router; generate.tsx converts back to a bool.
       includeGableWings: String(state.includeGableWings),
       mountHeight: state.mountHeight,

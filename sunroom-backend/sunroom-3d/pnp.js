@@ -176,8 +176,19 @@ function residuals(params, fovYfixed, worldPts, imagePts, aspect, W, H, weights)
     res.push((u - imagePts[i][0]) * ws);
     res.push((v - imagePts[i][1]) * ws);
   }
+  // Gentle gravity regularizer: Rc[1][0] is the world-Y component of the
+  // camera's RIGHT axis � zero when the camera is held level. Hand-held capture
+  // photos are near-level, but the free pose rolls a few degrees to soak up
+  // click noise, rendering the structure visibly leaning. A LIGHT pull keeps
+  // the pose in its correct basin (a strong one warps position/height � tried,
+  // reverted) while trimming most of the roll.
+  res.push(ROLL_WEIGHT * Rc[1][0]);
   return res;
 }
+
+// Tuned on real captures: 300 warped the pose (camera dropped below the eave);
+// 0 leaves ~5-8 degrees of visible lean. See residuals().
+const ROLL_WEIGHT = 80;
 
 function sumSq(r) {
   let s = 0;
@@ -257,7 +268,128 @@ function lmSolve(initParams, fovYfixed, worldPts, imagePts, aspect, W, H, iters,
     const [u, v, f] = projectPoint(eye, Rc, fovY, aspect, W, H, worldPts[i]);
     const e = Math.hypot(u - imagePts[i][0], v - imagePts[i][1]);
     total += e;
-    if (i >= 2) groundTotal += e;
+    if (i >= 2 && i <= 4) groundTotal += e;
+    if (f <= 0) front = false;
+  }
+  return {
+    params: p,
+    eye,
+    Rc,
+    fovY,
+    meanErr: total / worldPts.length,
+    groundErr: groundTotal / 3,
+    front,
+  };
+}
+
+// ─── Leveled (zero-roll) refit ────────────────────────────────────────────────
+// A hand-held capture photo is level: world-vertical lines are vertical in the
+// image. A free 6-DOF pose happily ROLLS a few degrees to soak up click noise,
+// which renders the whole structure visibly leaning. Rather than a soft roll
+// penalty (which warps the pose toward wrong-but-level local minima), we refit
+// with roll REMOVED FROM THE PARAMETERIZATION: R = Ry(yaw)·Rx(pitch). The
+// camera's right axis is (cosθ, 0, -sinθ) — horizontal by construction — so
+// the solution cannot lean, and because we warm-start from the best free pose
+// it stays in the same solution basin (same camera height/distance branch).
+
+function ryRx(yaw, pitch) {
+  const cy = Math.cos(yaw),
+    sy = Math.sin(yaw),
+    cp = Math.cos(pitch),
+    sp = Math.sin(pitch);
+  // columns are camera axes in world: right, up, back
+  return [
+    [cy, sy * sp, sy * cp],
+    [0, cp, -sp],
+    [-sy, cy * sp, cy * cp],
+  ];
+}
+
+// params: [ex,ey,ez, yaw, pitch] (+ optional fovY as params[5]). Same shape as
+// the free solver but with roll REMOVED from the parameterization — eye and
+// fov stay fully free so the optimizer can still seat the base on the weighted
+// ground markers; it just cannot lean the image to soak up click noise.
+function residualsLevel(params, fovYfixed, worldPts, imagePts, aspect, W, H, weights) {
+  const eye = [params[0], params[1], params[2]];
+  const Rc = ryRx(params[3], params[4]);
+  const fovY = params.length > 5 ? params[5] : fovYfixed;
+  const res = [];
+  for (let i = 0; i < worldPts.length; i++) {
+    const [u, v] = projectPoint(eye, Rc, fovY, aspect, W, H, worldPts[i]);
+    const ws = weights ? Math.sqrt(weights[i]) : 1;
+    res.push((u - imagePts[i][0]) * ws);
+    res.push((v - imagePts[i][1]) * ws);
+  }
+  return res;
+}
+
+function lmSolveLevel(initParams, fovYfixed, worldPts, imagePts, aspect, W, H, iters, weights) {
+  const n = initParams.length;
+  let p = initParams.slice();
+  let lambda = 1e-2;
+  let r = residualsLevel(p, fovYfixed, worldPts, imagePts, aspect, W, H, weights);
+  let err = sumSq(r);
+  const eps = 1e-5;
+
+  for (let it = 0; it < iters; it++) {
+    const cols = [];
+    for (let j = 0; j < n; j++) {
+      const pp = p.slice();
+      pp[j] += eps;
+      const pm = p.slice();
+      pm[j] -= eps;
+      const rp = residualsLevel(pp, fovYfixed, worldPts, imagePts, aspect, W, H, weights);
+      const rm = residualsLevel(pm, fovYfixed, worldPts, imagePts, aspect, W, H, weights);
+      cols.push(rp.map((v, k) => (v - rm[k]) / (2 * eps)));
+    }
+    const m = r.length;
+    const JtJ = Array.from({ length: n }, () => Array(n).fill(0));
+    const Jtr = Array(n).fill(0);
+    for (let a = 0; a < n; a++) {
+      for (let b = a; b < n; b++) {
+        let s = 0;
+        for (let k = 0; k < m; k++) s += cols[a][k] * cols[b][k];
+        JtJ[a][b] = JtJ[b][a] = s;
+      }
+      let s = 0;
+      for (let k = 0; k < m; k++) s += cols[a][k] * r[k];
+      Jtr[a] = s;
+    }
+
+    let improved = false;
+    for (let tries = 0; tries < 10; tries++) {
+      const A = JtJ.map((row, i) =>
+        row.map((v, jj) => v + (i === jj ? lambda * v + 1e-12 : 0)),
+      );
+      const delta = luSolve(A, Jtr.map((v) => -v));
+      const pn = p.map((v, i) => v + delta[i]);
+      const rn = residualsLevel(pn, fovYfixed, worldPts, imagePts, aspect, W, H, weights);
+      const en = sumSq(rn);
+      if (en < err) {
+        p = pn;
+        r = rn;
+        err = en;
+        lambda = Math.max(lambda * 0.4, 1e-10);
+        improved = true;
+        break;
+      }
+      lambda *= 4;
+    }
+    if (!improved) break;
+    if (err < 1e-8) break;
+  }
+
+  const eye = [p[0], p[1], p[2]];
+  const Rc = ryRx(p[3], p[4]);
+  const fovY = p.length > 5 ? p[5] : fovYfixed;
+  let total = 0,
+    groundTotal = 0,
+    front = true;
+  for (let i = 0; i < worldPts.length; i++) {
+    const [u, v, f] = projectPoint(eye, Rc, fovY, aspect, W, H, worldPts[i]);
+    const e = Math.hypot(u - imagePts[i][0], v - imagePts[i][1]);
+    total += e;
+    if (i >= 2 && i <= 4) groundTotal += e;
     if (f <= 0) front = false;
   }
   return {
@@ -283,7 +415,15 @@ function solveCamera(pts, dims, photoW, photoH) {
     [0, 0, 0],
     [0, 0, wallW_B],
   ];
-  const imagePts = pts.map(([nx, ny]) => [nx * photoW, ny * photoH]);
+  // Optional 6th correspondence: the TOP of the shared corner post
+  // (0, wallH, wallW_B). Under-existing captures supply it for free � the
+  // first roofline trace tap sits exactly there. Without it, the 5 points
+  // leave a family of camera poses that all fit yet disagree about where the
+  // corner TOP lands, and the drawn corner visibly DROOPS below the real one.
+  // With it, the auto-height sweep is forced to seat the corner top on the
+  // clicked pixel.
+  if (pts.length >= 6) worldPts.push([0, wallH, wallW_B]);
+  const imagePts = pts.slice(0, worldPts.length).map(([nx, ny]) => [nx * photoW, ny * photoH]);
   const aspect = photoW / photoH;
   const center = [wallW_C / 2, wallH / 2, wallW_B / 2];
 
@@ -296,7 +436,7 @@ function solveCamera(pts, dims, photoW, photoH) {
   // base on the clicked ground points; any leftover error lands on the TOP,
   // where the roof overhang/gable hides it. When the clicks DO form a clean box
   // the ground error is ~0 either way, so this never hurts a good solve.
-  const weights = [1, 1, 8, 8, 8];
+  const weights = pts.length >= 6 ? [1, 1, 8, 8, 8, 8] : [1, 1, 8, 8, 8];
 
   // Seed camera positions: out in front (+Z), a spread of sideways offsets and
   // standing-ish heights. The real photographer is somewhere in this volume.
@@ -318,6 +458,7 @@ function solveCamera(pts, dims, photoW, photoH) {
       const Rc = lookAtRc(eye, center);
       const init = [...eye, ...rmatToRodrigues(Rc)];
       const sol = lmSolve(init, fovY, worldPts, imagePts, aspect, photoW, photoH, 60, weights);
+      sol.penalty = plausibilityPenalty(sol, wallH);
       if (!best || betterGround(sol, best)) best = sol;
     }
   }
@@ -334,7 +475,46 @@ function solveCamera(pts, dims, photoW, photoH) {
     120,
     weights,
   );
+  polished.penalty = plausibilityPenalty(polished, wallH);
   if (betterGround(polished, best)) best = polished;
+
+  // TRUST-REGION LEVELING. The free pose can roll several degrees (click noise /
+  // box-model mismatch), which leans the rendered structure. A fully-free level
+  // solve drains to a wrong low-camera basin; a frozen-pose re-aim wrecks the
+  // base seating. Middle path: warm-start a level (yaw/pitch, eye and fov free)
+  // refit FROM the free winner, then accept it only if it stayed in the same
+  // basin (camera didn't move far) and kept both the seating and the overall
+  // fit reasonable. Otherwise keep the free pose � a slight lean beats a wrong
+  // camera.
+  {
+    const b0 = [best.Rc[0][2], best.Rc[1][2], best.Rc[2][2]];
+    const pitch0 = -Math.asin(Math.max(-1, Math.min(1, b0[1])));
+    const yaw0 = Math.atan2(b0[0], b0[2]);
+    const level = lmSolveLevel(
+      [...best.eye, yaw0, pitch0, best.fovY],
+      best.fovY, worldPts, imagePts, aspect, photoW, photoH, 120, weights,
+    );
+    level.penalty = plausibilityPenalty(level, wallH);
+    const moved = Math.hypot(
+      level.eye[0] - best.eye[0],
+      level.eye[1] - best.eye[1],
+      level.eye[2] - best.eye[2],
+    );
+    const span = Math.max(wallW_B, wallW_C);
+    const ok =
+      level.front &&
+      moved <= 0.35 * span &&            // same basin: camera stayed put-ish
+      level.groundErr <= best.groundErr + 4 && // base still seated
+      level.meanErr <= best.meanErr * 1.5 + 3; // overall fit sane
+    if (ok) {
+      best = level;
+    } else {
+      console.log(
+        `[pnp] leveling kept free pose (moved=${moved.toFixed(1)}ft ` +
+          `gnd=${level.groundErr.toFixed(1)}px mean=${level.meanErr.toFixed(1)}px)`,
+      );
+    }
+  }
 
   // Convert pose → Three.js camera params (position / target / up / fovY).
   const eye = best.eye,
@@ -364,8 +544,30 @@ function solveCamera(pts, dims, photoW, photoH) {
     photoH,
     meanReprojErr: best.meanErr,
     groundReprojErr: best.groundErr,
+    plausibility: best.penalty || 0,
     cheirality: best.front,
   };
+}
+
+// Physical plausibility of a candidate pose for a HAND-HELD CAPTURE PHOTO,
+// as a soft penalty in pixels added to fit error during candidate selection.
+// Pure reprojection can crown absurd cameras: on a real capture, a 14.5�-fov
+// camera 30ft up / 65ft away with 16� of roll beat the physical solution
+// (47� fov, 6.4ft high, 2.5px) by 0.6px � and drew a drooping, warped
+// composite. Soft penalties (not hard rejects) so a genuinely zoomed/elevated
+// photo can still win if the evidence is strong.
+function plausibilityPenalty(sol, wallH) {
+  let p = 0;
+  if (sol.fovY < 35) p += (35 - sol.fovY) * 1.5; // heavy telephoto
+  if (sol.fovY > 85) p += (sol.fovY - 85) * 1.5; // absurd wide
+  const y = sol.eye[1];
+  const maxY = 2.2 * (wallH || 8);
+  if (y > maxY) p += (y - maxY) * 2; // camera in the sky
+  if (y < 1) p += (1 - y) * 4; // camera at/below grade
+  const roll =
+    Math.asin(Math.min(1, Math.abs(sol.Rc[1][0]))) * (180 / Math.PI);
+  if (roll > 6) p += (roll - 6) * 2; // hand-held photos are near-level
+  return p;
 }
 
 // Prefer cheirality-valid solutions; among equal validity, the camera that seats
@@ -373,14 +575,29 @@ function solveCamera(pts, dims, photoW, photoH) {
 // back to overall mean error only when ground errors tie.
 function betterGround(a, b) {
   if (a.front !== b.front) return a.front;
-  if (Math.abs(a.groundErr - b.groundErr) > 0.5) return a.groundErr < b.groundErr;
-  return a.meanErr < b.meanErr;
+  const pa = a.penalty || 0,
+    pb = b.penalty || 0;
+  const ga = a.groundErr + pa,
+    gb = b.groundErr + pb;
+  if (Math.abs(ga - gb) > 0.5) return ga < gb;
+  return a.meanErr + pa < b.meanErr + pb;
 }
 
 // Prefer cheirality-valid solutions; among equal validity, lower error wins.
 function better(a, b) {
   if (a.front !== b.front) return a.front; // valid beats invalid
   return a.meanErr < b.meanErr;
+}
+
+// Balanced selection for the LEVEL-constrained search. betterGround (ground
+// error first) works for free poses — free DOF can zero the ground AND keep
+// the top decent, so ground-first just breaks ties. Under the level constraint
+// those goals genuinely trade off, and ground-first selects degenerate fits
+// (base perfect, top 40px+ off). Scoring mean + ground keeps the seating
+// pressure without letting the top blow up.
+function betterScore(a, b) {
+  if (a.front !== b.front) return a.front;
+  return a.meanErr + a.groundErr < b.meanErr + b.groundErr;
 }
 
 /**
@@ -405,7 +622,11 @@ function solveCameraAutoHeight(pts, dims, photoW, photoH) {
     // Select on overall mean error (the ground markers are already weighted
     // heavily inside solveCamera, so the chosen camera seats the base; selecting
     // on ground error alone picks too-short heights that blow out the top).
-    if (!best || cam.meanReprojErr < best.meanReprojErr) {
+    const score = cam.meanReprojErr + (cam.plausibility || 0);
+    const bestScore = best
+      ? best.meanReprojErr + (best.plausibility || 0)
+      : Infinity;
+    if (!best || score < bestScore) {
       best = cam;
       best.solvedHeight = h;
     }
@@ -416,6 +637,59 @@ function solveCameraAutoHeight(pts, dims, photoW, photoH) {
       `groundErr=${best.groundReprojErr.toFixed(1)}px`,
   );
   return best;
+}
+
+/**
+ * solveCameraAutoFit — seat the structure on the markers even when the
+ * CONFIGURED footprint doesn't match the structure in the photo.
+ *
+ * Same insight as auto-height, one level up: the drawn box must fit the
+ * CAPTURE. If the configured side/front widths disagree with the clicked
+ * points (salesperson designs an 18×10 room over a photo of a ~14×13 one),
+ * no camera exists that lines the box up — the solver warps (rolls) the
+ * camera several degrees trying, and the whole render LEANS. When the
+ * configured dims fit well we keep them; when they fit poorly we sweep
+ * scale factors around them and adopt the footprint the photo implies.
+ * The adopted dims are returned as fittedDims for the renderer; pricing
+ * always keeps the configured dims.
+ */
+function solveCameraAutoFit(pts, dims, photoW, photoH) {
+  const base = solveCameraAutoHeight(pts, dims, photoW, photoH);
+  base.fittedDims = { wallW_B: dims.wallW_B, wallW_C: dims.wallW_C };
+  const baseScore = base.meanReprojErr + (base.plausibility || 0);
+  if (baseScore <= 8) return base; // config matches the photo
+
+  // Coarse scan of footprint scales at the configured height (single solve
+  // each — cheap), then full auto-height only on the most promising pair.
+  const factors = [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4];
+  let cand = null;
+  for (const fs of factors) {
+    for (const ff of factors) {
+      const d = {
+        wallW_B: dims.wallW_B * fs,
+        wallW_C: dims.wallW_C * ff,
+        wallH: dims.wallH,
+      };
+      const c = solveCamera(pts, d, photoW, photoH);
+      const cScore = c.meanReprojErr + (c.plausibility || 0);
+      if (!cand || cScore < cand.err) {
+        cand = { err: cScore, d };
+      }
+    }
+  }
+  const refined = solveCameraAutoHeight(pts, cand.d, photoW, photoH);
+  // Adopt only a decisive improvement — otherwise trust the config.
+  if (refined.meanReprojErr <= base.meanReprojErr * 0.6 && refined.meanReprojErr <= 10) {
+    console.log(
+      `[pnp] auto-fit: footprint ${dims.wallW_B.toFixed(1)}×${dims.wallW_C.toFixed(1)}ft ` +
+        `→ ${cand.d.wallW_B.toFixed(1)}×${cand.d.wallW_C.toFixed(1)}ft ` +
+        `(config didn't match the photo: ${base.meanReprojErr.toFixed(1)}px → ` +
+        `${refined.meanReprojErr.toFixed(1)}px)`,
+    );
+    refined.fittedDims = { wallW_B: cand.d.wallW_B, wallW_C: cand.d.wallW_C };
+    return refined;
+  }
+  return base;
 }
 
 function reprojectionError(camera) {
@@ -450,4 +724,10 @@ function reprojectionError(camera) {
   return mean;
 }
 
-module.exports = { solveCamera, solveCameraAutoHeight, reprojectionError, projectPoint };
+module.exports = {
+  solveCamera,
+  solveCameraAutoHeight,
+  solveCameraAutoFit,
+  reprojectionError,
+  projectPoint,
+};

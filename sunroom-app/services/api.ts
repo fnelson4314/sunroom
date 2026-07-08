@@ -130,6 +130,7 @@ export const startGeneration = async (data: {
   roof_only_sub_style?: string | null;
   under_existing_shape?: string | null;
   include_gable_wings?: boolean;
+  wall_combo?: string | null;
   wall_corners?: string;
 }) => {
   try {

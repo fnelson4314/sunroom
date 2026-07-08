@@ -80,6 +80,7 @@ def generate_sunroom(
     roof_only_sub_style: str = None,
     under_existing_shape: str = None,
     include_gable_wings: bool = True,
+    wall_combo: str = None,
     wall_corners: str = "",
 ):
     def is_cancelled() -> bool:
@@ -119,6 +120,7 @@ def generate_sunroom(
             wall_color=wall_color,
             under_existing_shape=under_existing_shape,
             include_gable_wings=include_gable_wings,
+            wall_combo=wall_combo,
         )
 
         if is_cancelled():
@@ -181,6 +183,7 @@ def generate_sunroom(
                     "dropFt":            STRUCTURE_DROP_FT,
                     "roofline":          roofline,
                     "includeGableWings": include_gable_wings,
+                    "wallCombo":         wall_combo,
                 }
 
                 with httpx.Client(timeout=90) as client:
@@ -206,6 +209,28 @@ def generate_sunroom(
                     f"(composite {len(composite_bytes)}b, "
                     f"mask {'yes' if render_mask_bytes else 'none'})"
                 )
+
+                # SINGLE SOURCE OF TRUTH for the wall combo: the renderer returns
+                # the combo it ACTUALLY drew (explicit, inferred, or geometric
+                # auto-detect). If the prompt was built assuming a different pair,
+                # rebuild it — a prompt describing one wall layout over a composite
+                # showing the other makes FLUX repaint a scrambled panel patchwork.
+                resolved_combo = render_data.get("combo")
+                if resolved_combo in ("AB", "BC") and resolved_combo != wall_combo:
+                    logger.info(
+                        f"[{session_id}] renderer resolved wall combo "
+                        f"{resolved_combo} (request had {wall_combo!r}) — rebuilding prompt"
+                    )
+                    positive_prompt, negative_prompt = build_prompt(
+                        selected_option_ids,
+                        wall_data=wall_data,
+                        roof_style=roof_style,
+                        wall_system=wall_system,
+                        wall_color=wall_color,
+                        under_existing_shape=under_existing_shape,
+                        include_gable_wings=include_gable_wings,
+                        wall_combo=resolved_combo,
+                    )
 
                 # Upload debug composite + mask
                 debug_url = upload_bytes(composite_bytes, "jpg", "debug-composites")

@@ -72,6 +72,7 @@ export default function GenerateScreen() {
     roofOnlySubStyle: string;
     underExistingShape: string;
     includeGableWings: string;
+    wallCombo: string;
     customerName: string;
     customerEmail: string;
     notes: string;
@@ -193,6 +194,7 @@ export default function GenerateScreen() {
             roof_only_sub_style: params.roofOnlySubStyle || null,
             under_existing_shape: params.underExistingShape || null,
             include_gable_wings: params.includeGableWings !== "false",
+            wall_combo: params.wallCombo || null,
             wall_corners: params.wall_corners || "",
           },
           null,

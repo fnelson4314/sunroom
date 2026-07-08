@@ -31,6 +31,8 @@ class GenerateRequest(BaseModel):
     # Under-existing: True = add a new gable/wing infill above the header;
     # False = "walls only" (keep the existing gable). Default True.
     include_gable_wings: Optional[bool] = True
+    # Which two walls to render (AB → A+B, BC → B+C). All designed walls priced.
+    wall_combo: Optional[str] = None
     wall_corners: Optional[str] = ""
 
     class Config:
@@ -67,6 +69,7 @@ async def start_generation(body: GenerateRequest):
             roof_only_sub_style=body.roof_only_sub_style,
             under_existing_shape=body.under_existing_shape,
             include_gable_wings=body.include_gable_wings if body.include_gable_wings is not None else True,
+            wall_combo=body.wall_combo,
             wall_corners=body.wall_corners or "",
         )
         logger.info(f"Task enqueued: {task.id} (wall_system={body.wall_system}, roof_style={body.roof_style})")

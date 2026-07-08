@@ -70,11 +70,30 @@ DOOR_STYLE_DESCRIPTIONS = {
     "french":  "french double doors, two hinged glass doors",
 }
 
-WALL_POSITION = {
-    "A": "left wall",
-    "B": "side wall (runs perpendicular to camera)",
-    "C": "front wall (faces camera)",
+# Position labels depend on WHICH pair of walls is rendered (the camera combo):
+# the side wall recedes on the left, the front wall faces the camera. Hardcoded
+# labels (old behavior) told FLUX that B was a side wall and C faced the camera
+# even in an AB view where B IS the front wall and C isn't in frame at all —
+# the repaint then scrambled panel layouts trying to obey a wrong description.
+WALL_POSITION_BY_COMBO = {
+    "AB": {
+        "A": "left side wall (recedes away from the camera)",
+        "B": "front wall (faces the camera)",
+    },
+    "BC": {
+        "B": "left side wall (recedes away from the camera)",
+        "C": "front wall (faces the camera)",
+    },
 }
+
+
+def _resolve_combo(walls: list, wall_combo: str) -> str:
+    """Explicit combo wins; otherwise infer from the wall set (mirrors the
+    renderer's fallback): A present without C → AB, else BC."""
+    if wall_combo in ("AB", "BC"):
+        return wall_combo
+    ids = {w.get("id") for w in walls}
+    return "AB" if ("A" in ids and "C" not in ids) else "BC"
 
 
 def _describe_panel(
@@ -149,7 +168,7 @@ def _describe_gable_glass(gable: dict, wall_id: str, wall_height_ft: str) -> str
     return f"{pane_str}{mat_label} {shape} decorative {label} accent panel above wall panels, vertical end wall accent only"
 
 
-def build_wall_description(wall_data: str) -> str:
+def build_wall_description(wall_data: str, wall_combo: str = None) -> str:
     """
     Convert the wall builder JSON into natural language for FLUX.
 
@@ -159,6 +178,10 @@ def build_wall_description(wall_data: str) -> str:
 
     The frontend sends widthFt/heightFt as ceiling-ft strings and resolves
     per-unit heights before serialising to wallData.
+
+    Only the TWO RENDERED walls (per wall_combo) are described — a hidden third
+    wall is priced but not in the image, and describing it makes FLUX paint
+    phantom walls/panels.
     """
     if not wall_data:
         return ""
@@ -172,9 +195,15 @@ def build_wall_description(wall_data: str) -> str:
     if not walls:
         return ""
 
+    combo = _resolve_combo(walls, wall_combo)
+    position_labels = WALL_POSITION_BY_COMBO[combo]
+
     wall_descs = []
 
     for wall in walls:
+        # Skip walls the camera can't see — they must not be painted.
+        if wall.get("id") not in position_labels:
+            continue
         wall_id        = wall.get("id", "?")
         # Frontend sends widthFt/heightFt (already ceiling-converted from inches)
         width_ft       = wall.get("widthFt", "")
@@ -195,7 +224,7 @@ def build_wall_description(wall_data: str) -> str:
         legacy_transom_h  = wall.get("transomHeightIn", "")
         legacy_kneewall_h = wall.get("kneewallHeightIn", "")
 
-        position = WALL_POSITION.get(wall_id, f"Wall {wall_id}")
+        position = position_labels.get(wall_id, f"Wall {wall_id}")
 
         dim_parts = []
         if width_ft:  dim_parts.append(f"{width_ft}ft wide")
@@ -257,6 +286,7 @@ def build_prompt(
     wall_color: str = "white",
     under_existing_shape: str = None,
     include_gable_wings: bool = True,
+    wall_combo: str = None,
 ) -> tuple[str, str]:
     """
     Build (positive_prompt, negative_prompt) for the AI repaint step.
@@ -270,7 +300,7 @@ def build_prompt(
     """
     prefix = quality_prefix(wall_color)
     try:
-        wall_description = build_wall_description(wall_data)
+        wall_description = build_wall_description(wall_data, wall_combo)
 
         # Roof style enforcement. The roof colour comes entirely from the prompt
         # (Canny only conveys the roof's shape), so be explicit: dark asphalt
