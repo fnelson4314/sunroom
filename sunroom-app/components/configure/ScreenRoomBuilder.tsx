@@ -779,6 +779,15 @@ export default function ScreenRoomBuilder({
   const pricingWFt = inToCeilFt(activeWall?.widthIn || "");
   const pricingHFt = inToCeilFt(activeWall?.heightIn || "");
 
+  // Progressive disclosure gate — mirrors WallBuilder: reveal the rest of the
+  // builder only once a base wall type is picked, so the screen isn't a wall of
+  // controls on arrival. Don't block when there's nothing to pick, or when the
+  // wall already has dimensions (e.g. a draft, or a product-line switch that
+  // cleared wallType) — re-gating a configured wall would look like data loss.
+  const hasDims = wIn > 0 && hIn > 0;
+  const hasWallType =
+    !!selectedWallType || baseWallTypeOptions.length === 0 || hasDims;
+
   if (!activeWall) return null;
 
   return (
@@ -821,6 +830,18 @@ export default function ScreenRoomBuilder({
         </View>
       )}
 
+      {!hasWallType && (
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionBlock}>
+            <Text style={styles.sectionHint}>
+              Pick a wall type above to start configuring this wall.
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {hasWallType && (
+        <>
       {/* Wall tabs */}
       {/* Frame color picker — only for tan/bronze wall types */}
       {isTanBronzeWallType && (
@@ -1394,6 +1415,8 @@ export default function ScreenRoomBuilder({
             )}
           </View>
         </View>
+      )}
+        </>
       )}
     </View>
   );

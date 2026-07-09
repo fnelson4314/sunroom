@@ -5,3 +5,8 @@ sunroom-app/node_modules/
 *.pyc
 __pycache__/
 .env
+.claude/
+DEPLOYMENT.md
+HANDOFF.md
+TODO.md
+CLAUDE.md

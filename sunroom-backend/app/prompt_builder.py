@@ -11,8 +11,18 @@ logger = logging.getLogger(__name__)
 # caption style: "SUNRM, a <colour> aluminum-framed sunroom ...". The roof,
 # house type, and "attached" wording are intentionally NOT here — the roof is
 # described once by roof_fragment, and the real house is already in the photo.
-def quality_prefix(frame_color: str) -> str:
+def quality_prefix(frame_color: str, is_screen_room: bool = False) -> str:
     color = (frame_color or "white").strip().lower()
+    if is_screen_room:
+        # A screen room has NO glass. The glass wording below is the single most
+        # damaging thing you can hand FLUX over a screened-porch composite — it
+        # paints window panes and sky reflections onto the insect screen.
+        return (
+            f"SUNRM, photorealistic exterior photo of a {color} aluminum-framed "
+            f"screened porch with large charcoal insect screen mesh panels, "
+            f"matte dark screen mesh that you can see through into a shaded "
+            f"interior, no glass anywhere, attached to the house, "
+        )
     return (
         f"SUNRM, photorealistic exterior photo of a {color} aluminum-framed "
         f"sunroom with large glass walls of clear tinted reflective glass "
@@ -44,6 +54,14 @@ NEGATIVE_PROMPT = (
     "pyramid roof, glass ceiling, polycarbonate panels"
 )
 
+# Appended for 2_inch screen rooms. Everything that would turn insect screen back
+# into glazing.
+SCREEN_NEGATIVE_EXTRA = (
+    ", glass walls, glass panels, window panes, windows, glazing, "
+    "reflections, sky reflection, mirrored glass, shiny panels, "
+    "sliding glass door, solid walls"
+)
+
 # ─── Panel type → readable description ───────────────────────────────────────
 
 # New IDs: "door" / "door_t". Old IDs kept for backward compat with saved drafts.
@@ -61,6 +79,12 @@ PANEL_TYPE_DESCRIPTIONS = {
     "sliding_door":   "sliding glass door",
     "sliding_door_t": "sliding glass door with transom above",
     "solid_panel":    "solid aluminum panel",
+    # Screen rooms (2_inch). NOT glass — describing these as glass panels is what
+    # made FLUX paint window panes over a screened porch.
+    "screen":         "charcoal insect screen mesh panel, no glass",
+    "screen_t":       "charcoal insect screen mesh panel with a screen transom above, no glass",
+    "screen_door":    "hinged screen door with a mid rail and a lever handle, screen mesh, no glass",
+    "screen_door_t":  "hinged screen door with a screen transom above, screen mesh, no glass",
 }
 
 DOOR_STYLE_DESCRIPTIONS = {
@@ -148,7 +172,9 @@ def _describe_panel(
     return base
 
 
-def _describe_gable_glass(gable: dict, wall_id: str, wall_height_ft: str) -> str:
+def _describe_gable_glass(
+    gable: dict, wall_id: str, wall_height_ft: str, is_screen: bool = False
+) -> str:
     if not gable:
         return ""
 
@@ -158,9 +184,14 @@ def _describe_gable_glass(gable: dict, wall_id: str, wall_height_ft: str) -> str
 
     shape = "trapezoidal" if wall_h > 7 else "triangular"
 
-    mat_label = "solid aluminum" if glass_type == "solid" else (
-        "G1 insulated glass" if glass_type == "g1" else "single-pane glass"
-    )
+    if is_screen:
+        # The ScreenRoomBuilder calls this control "Gable Screen" / "Wing Screen".
+        # Its non-solid value is screen mesh, not glazing.
+        mat_label = "solid aluminum" if glass_type == "solid" else "charcoal insect screen mesh"
+    else:
+        mat_label = "solid aluminum" if glass_type == "solid" else (
+            "G1 insulated glass" if glass_type == "g1" else "single-pane glass"
+        )
 
     pane_str = f"exactly {count}-pane " if count > 1 else ""
     label    = "gable end" if wall_id == "B" else "wing end"
@@ -259,7 +290,10 @@ def build_wall_description(wall_data: str, wall_combo: str = None) -> str:
 
         gable_str = ""
         if gable_glass:
-            gable_str = _describe_gable_glass(gable_glass, wall_id, height_ft)
+            wall_is_screen = any(str(pt).startswith("screen") for pt in panel_types)
+            gable_str = _describe_gable_glass(
+                gable_glass, wall_id, height_ft, wall_is_screen
+            )
 
         parts = [f"{position} (Wall {wall_id})"]
         if dims:
@@ -273,7 +307,16 @@ def build_wall_description(wall_data: str, wall_combo: str = None) -> str:
     if not wall_descs:
         return ""
 
-    return "Sunroom structure: " + ". ".join(wall_descs) + "."
+    # Screen rooms must not be introduced as a "Sunroom" — the noun alone is enough
+    # to pull FLUX back toward glass. Detect from the panel types rather than
+    # threading wall_system down here.
+    is_screen = any(
+        str(pt).startswith("screen")
+        for w in walls
+        for pt in w.get("panelTypes", [])
+    )
+    lead = "Screened porch structure: " if is_screen else "Sunroom structure: "
+    return lead + ". ".join(wall_descs) + "."
 
 
 # ─── Main prompt builder ──────────────────────────────────────────────────────
@@ -287,6 +330,7 @@ def build_prompt(
     under_existing_shape: str = None,
     include_gable_wings: bool = True,
     wall_combo: str = None,
+    screen_options: dict = None,
 ) -> tuple[str, str]:
     """
     Build (positive_prompt, negative_prompt) for the AI repaint step.
@@ -298,7 +342,11 @@ def build_prompt(
     (flux-fill-dev / flux-canny-dev) do not accept a negative prompt input, so
     it is effectively unused downstream.
     """
-    prefix = quality_prefix(wall_color)
+    # 2_inch is the screen-room product line: insect screen, not glass. Every
+    # glass-flavored fragment below has to be swapped, not just the wall list.
+    is_screen_room = wall_system == "2_inch"
+    prefix = quality_prefix(wall_color, is_screen_room)
+    negative = NEGATIVE_PROMPT + (SCREEN_NEGATIVE_EXTRA if is_screen_room else "")
     try:
         wall_description = build_wall_description(wall_data, wall_combo)
 
@@ -318,25 +366,38 @@ def build_prompt(
         if roof_style == "under_existing" and under_existing_shape in ("gable", "studio"):
             shape_word = "gable" if under_existing_shape == "gable" else "single-slope studio"
             beam_color = (wall_color or "white").strip().lower()
+            # Screen rooms have no glass — say "screen" here too, or the walls the
+            # composite draws as insect screen get repainted as glazing.
+            wall_noun = (
+                "screened porch walls of charcoal insect screen mesh"
+                if is_screen_room else "glass sunroom walls"
+            )
+            infill_noun = "screen" if is_screen_room else "glass"
             if include_gable_wings:
                 # Adding a NEW gable/wing infill (glass or solid) up to the roof.
                 roof_fragment = (
-                    f"glass sunroom walls installed underneath the existing {shape_word} "
+                    f"{wall_noun} installed underneath the existing {shape_word} "
                     "house roof, the existing roof stays unchanged above, no new roof added, "
                     f"the wall tops meet a {beam_color} aluminum header beam just below the "
-                    "existing eaves, with a new glass gable/wing infill filling the area "
+                    f"existing eaves, with a new {infill_noun} gable/wing infill filling the area "
                     "between the header beam and the existing roof"
                 )
             else:
                 # Walls only — the existing gable/end wall above is KEPT. No new
                 # gable/wing infill; the walls simply run up to the existing header.
                 roof_fragment = (
-                    f"glass sunroom walls installed underneath the existing {shape_word} "
+                    f"{wall_noun} installed underneath the existing {shape_word} "
                     "house roof, the existing roof AND its existing gable end wall stay "
                     "completely unchanged above, no new roof and no new gable infill added, "
-                    f"the glass walls run straight up to meet a {beam_color} aluminum header "
+                    f"the walls run straight up to meet a {beam_color} aluminum header "
                     "beam just below the existing eaves"
                 )
+        elif roof_style == "under_existing" and is_screen_room:
+            roof_fragment = (
+                "screened porch walls of charcoal insect screen mesh installed underneath "
+                "the existing house roof, the existing roof stays unchanged above, no new "
+                "roof added, the wall tops meet an aluminum header beam just below the eaves"
+            )
 
         # Transom APPEARANCE constraint — NOT enforcement.
         # The per-unit wall_description already states exactly which units carry a
@@ -347,12 +408,47 @@ def build_prompt(
         # fights the model/LoRA tendency to split them. Kneewalls: no global
         # fragment at all; the per-unit description covers them precisely.
         has_transom = "transom" in wall_data.lower() if wall_data else False
+        band_material = "screen mesh" if is_screen_room else "glass"
         transom_fragment = (
-            "any transom is a single continuous horizontal glass band spanning the "
+            f"any transom is a single continuous horizontal {band_material} band spanning the "
             "full width of its panel, not divided, not split into sections, "
             if has_transom else ""
         )
         kneewall_fragment = ""
+
+        # Screen rooms: kneewall / chairrail / handrail span whole walls, so they
+        # come from screen_options rather than the per-unit wall description.
+        screen_fragment = ""
+        if is_screen_room and screen_options:
+            feats = []
+            kn = screen_options.get("kneewall") or {}
+            if kn.get("enabled"):
+                style = (kn.get("solidStyle") or "panel").lower()
+                style_word = {
+                    "vinyl": "white vinyl",
+                    "hardieboard": "painted fiber-cement",
+                }.get(style, "solid aluminum")
+                h = kn.get("heightIn") or ""
+                h_txt = f"{h}-inch " if h else ""
+                feats.append(
+                    f"a {h_txt}{style_word} kneewall skirt running along the bottom "
+                    "of every screen wall, below the screen mesh"
+                )
+            cr = screen_options.get("chairrail") or {}
+            if cr.get("enabled"):
+                h = cr.get("heightIn") or ""
+                h_txt = f"{h}-inch " if h else ""
+                feats.append(
+                    f"a horizontal aluminum chairrail crossing every screen wall at "
+                    f"{h_txt}height"
+                )
+            if (screen_options.get("handrail") or {}).get("enabled"):
+                feats.append(
+                    "an aluminum handrail with evenly spaced vertical pickets running "
+                    "along the bottom of every screen wall"
+                )
+            if feats:
+                screen_fragment = ", ".join(feats) + ", "
 
         # Keywords that conflict with opaque roof enforcement — exclude these fragments
         ROOF_CONFLICT_KEYWORDS = [
@@ -403,6 +499,8 @@ def build_prompt(
             middle_parts.append(transom_fragment)
         if kneewall_fragment:
             middle_parts.append(kneewall_fragment)
+        if screen_fragment:
+            middle_parts.append(screen_fragment)
         if wall_description:
             middle_parts.append(wall_description)
         if fragments:
@@ -414,8 +512,8 @@ def build_prompt(
             positive = prefix + QUALITY_SUFFIX
 
         logger.info(f"Built prompt positive: {positive}")
-        return positive, NEGATIVE_PROMPT
+        return positive, negative
 
     except Exception as e:
         logger.error(f"Prompt builder error: {str(e)}")
-        return prefix + QUALITY_SUFFIX, NEGATIVE_PROMPT
+        return prefix + QUALITY_SUFFIX, negative

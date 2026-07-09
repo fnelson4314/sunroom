@@ -1426,6 +1426,8 @@ export function useConfigureState() {
     Object.keys(state.roofAddOns).forEach((id) => selectedOptions.push(id));
     const uniqueOptions = [...new Set(selectedOptions)];
 
+    const isScreenRoom = state.selectedProductLine?.wall_system === "2_inch";
+
     // Convert wall dimensions to ft (ceiling) for backend prompt generation.
     // Also resolve per-unit heights with global defaults.
     const wallDataForBackend = state.walls.map((wall) => ({
@@ -1447,6 +1449,64 @@ export function useConfigureState() {
       gableGlass: wall.gableGlass,
     }));
 
+    // Screen rooms (2_inch) configure into state.screenRoom, NOT state.walls —
+    // state.walls exists (setNumberOfWalls builds it) but stays dimensionless, so
+    // sending it made the backend see widthFt "0" and silently substitute an
+    // 18×10×8 default box of GLASS panels. Project the screen config onto the same
+    // wallData shape instead, so parseConfig / getPnPDims / build_wall_description
+    // all keep working and the renderer solves against the real footprint.
+    const screenWallDataForBackend = state.screenRoom.walls.map((wall) => {
+      const panelTypes = wall.unitTypes.map((t) => {
+        const door = t === "door";
+        if (wall.transomEnabled) return door ? "screen_door_t" : "screen_t";
+        return door ? "screen_door" : "screen";
+      });
+      const units = panelTypes.length;
+
+      // Unit widths are absolute inches, but widthFt is CEILED to feet for pricing
+      // and the renderer lays units out left-to-right by their own widths. Rescale
+      // so they sum to the ceiled wall width — otherwise the last unit overhangs
+      // or leaves a gap of up to 11".
+      const targetIn = inToCeilFt(wall.widthIn) * 12;
+      const raw = wall.unitWidths.map((w) => parseFloat(w) || 0);
+      const rawSum = raw.reduce((a, b) => a + b, 0);
+      const unitWidths =
+        rawSum > 0
+          ? raw.map((w) => String(Math.round((w * targetIn) / rawSum * 10) / 10))
+          : [];
+
+      const kneewall = state.screenRoom.kneewall;
+      return {
+        id: wall.id,
+        widthFt: String(inToCeilFt(wall.widthIn)),
+        heightFt: String(inToCeilFt(wall.heightIn)),
+        units,
+        panelTypes,
+        unitWidths,
+        // Transom is per-wall for screen rooms; fan it out per unit.
+        unitTransomHeights: Array.from({ length: units }, () =>
+          wall.transomEnabled ? wall.transomHeightIn : "",
+        ),
+        unitKneewallHeights: Array.from({ length: units }, () => ""),
+        unitMaterials: Array.from({ length: units }, () => ({
+          transom: "screen" as const,
+          kneewall: "screen" as const,
+        })),
+        unitDoorStyles: Array.from({ length: units }, () => "screen" as const),
+        splitTransom: false,
+        splitKneewall: false,
+        gableGlass: wall.gableGlass,
+      };
+    });
+
+    // Structure-wide screen features. Kneewall / chairrail / handrail run across
+    // every wall rather than per unit, so they can't ride in wallData.
+    const screenOptions = {
+      kneewall: state.screenRoom.kneewall,
+      chairrail: state.screenRoom.chairrail,
+      handrail: state.screenRoom.handrail,
+    };
+
     // For roof_only, use the sub-style for LoRA selection
     const effectiveRoofStyle =
       state.roofStyle === "roof_only" ? "roof_only" : state.roofStyle;
@@ -1462,7 +1522,11 @@ export function useConfigureState() {
       // LoRA). It was previously omitted, so generate.tsx always sent "" — fixed.
       wallSystem: state.selectedProductLine?.wall_system ?? "",
       selectedOptions: JSON.stringify(uniqueOptions),
-      wallData: JSON.stringify(wallDataForBackend),
+      wallData: JSON.stringify(
+        isScreenRoom ? screenWallDataForBackend : wallDataForBackend,
+      ),
+      // Empty string for non-screen lines so the backend can treat it as absent.
+      screenOptions: isScreenRoom ? JSON.stringify(screenOptions) : "",
       lineItems: JSON.stringify(state.lineItems),
       wallAddOns: JSON.stringify(state.wallAddOns),
       wallOptionsByWall: JSON.stringify(wallOptionsByWall),

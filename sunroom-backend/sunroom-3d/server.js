@@ -356,6 +356,16 @@ async function render3D(body) {
     // implied, or geometrically auto-detected), so scene.html always matches the
     // camera solve above.
     wallCombo: combo,
+    // Screen rooms (2_inch): structure-wide kneewall / chairrail / handrail.
+    // These span whole walls rather than individual units, so they arrive
+    // alongside wallData rather than inside it. Null for every other line.
+    screenOptions:
+      body.screenOptions && typeof body.screenOptions === "object"
+        ? body.screenOptions
+        : null,
+    // True when the walls are insect screen rather than glass. Drives the panel
+    // material: matte dark mesh, no sky sheen, no clearcoat.
+    isScreenRoom: spec.wallSystem === "2_inch",
   };
 
   // A nonzero dropFt is the ONLY thing that shifts the structure vertically in

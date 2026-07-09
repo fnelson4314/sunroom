@@ -142,10 +142,14 @@ export default function HomeScreen() {
           <View style={styles.cardTop}>
             <View style={styles.cardLeft}>
               <Text style={styles.customerName}>{displayName}</Text>
-              {item.customer_name && !isSavedDraft && (
+              {/* Coerce to real booleans: a bare `item.customer_name && …` leaks
+                  the empty string "" (and `width_ft && …` leaks 0) as a text-node
+                  child of this View, which RN rejects — on web it spams
+                  "text node cannot be a child of a <View>" and on native it throws. */}
+              {!!item.customer_name && !isSavedDraft && (
                 <Text style={styles.productName}>{item.customer_name}</Text>
               )}
-              {item.width_ft && item.depth_ft && (
+              {!!item.width_ft && !!item.depth_ft && (
                 <Text style={styles.dimensions}>
                   {item.width_ft} × {item.depth_ft} ft
                 </Text>

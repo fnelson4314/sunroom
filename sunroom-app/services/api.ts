@@ -132,6 +132,9 @@ export const startGeneration = async (data: {
   include_gable_wings?: boolean;
   wall_combo?: string | null;
   wall_corners?: string;
+  // Screen rooms (2_inch) only: structure-wide kneewall / chairrail / handrail.
+  // JSON string; "" for every other product line.
+  screen_options?: string;
 }) => {
   try {
     const response = await api.post("/generate/", data);

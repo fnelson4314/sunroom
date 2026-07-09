@@ -82,6 +82,7 @@ def generate_sunroom(
     include_gable_wings: bool = True,
     wall_combo: str = None,
     wall_corners: str = "",
+    screen_options: str = "",
 ):
     def is_cancelled() -> bool:
         result = supabase.table("configurations")\
@@ -110,6 +111,16 @@ def generate_sunroom(
             .eq("id", session_id)\
             .execute()
 
+        # Screen rooms: structure-wide kneewall / chairrail / handrail. None for
+        # every other product line, and both the prompt and the renderer treat
+        # absent as "draw none". Parsed here because build_prompt needs it below.
+        parsed_screen_options = None
+        if screen_options:
+            try:
+                parsed_screen_options = json.loads(screen_options)
+            except Exception:
+                logger.warning(f"[{session_id}] Could not parse screen_options")
+
         # ── Step 1: Build prompt ──────────────────────────────────────────────
         logger.info(f"[{session_id}] Building prompt")
         positive_prompt, negative_prompt = build_prompt(
@@ -121,6 +132,7 @@ def generate_sunroom(
             under_existing_shape=under_existing_shape,
             include_gable_wings=include_gable_wings,
             wall_combo=wall_combo,
+            screen_options=parsed_screen_options,
         )
 
         if is_cancelled():
@@ -184,6 +196,7 @@ def generate_sunroom(
                     "roofline":          roofline,
                     "includeGableWings": include_gable_wings,
                     "wallCombo":         wall_combo,
+                    "screenOptions":     parsed_screen_options,
                 }
 
                 with httpx.Client(timeout=90) as client:
@@ -230,6 +243,7 @@ def generate_sunroom(
                         under_existing_shape=under_existing_shape,
                         include_gable_wings=include_gable_wings,
                         wall_combo=resolved_combo,
+                        screen_options=parsed_screen_options,
                     )
 
                 # Upload debug composite + mask

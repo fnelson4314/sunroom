@@ -102,6 +102,41 @@
           metalness: 0.35,
         });
       }
+      // Insect screen (2_inch screen rooms). Deliberately NOT glassMat: real screen
+      // mesh is matte and reads as a flat dark plane — no sky sheen, no clearcoat,
+      // no reflections. Giving it glass's envMap made FLUX paint window panes.
+      //
+      // UNLIT (MeshBasicMaterial), like the interior occluder. A lit material cannot
+      // render dark here: between ambient 0.7, the hemisphere/fill lights and the
+      // standard specular floor, even a pure-black albedo washes out to mid grey
+      // (measured: albedo 0x2f353a → rgb(169,178,185); pure red → rgb(254,84,51),
+      // i.e. an additive floor of ~84 on green alone). Screen mesh has to be flat
+      // and dark or Canny finds no wall and FLUX paints glass.
+      //
+      // The hex looks far too dark because three r128 has no ColorManagement: this
+      // value is consumed as LINEAR, then ACES tone-mapped and sRGB-encoded on the
+      // way out (renderer.outputEncoding / toneMapping below). Calibrated against
+      // the actual composite: 0x060709 → rgb(26,31,37), 0x0c0e11 → rgb(49,56,66).
+      // Adjust by re-measuring, not by eyeballing the hex.
+      //
+      // DoubleSide because the front wall is mirrored (negative determinant flips
+      // winding), same reason shingleMat needs it.
+      function screenMat() {
+        return new THREE.MeshBasicMaterial({
+          color: 0x0c0e11,
+          side: THREE.DoubleSide,
+        });
+      }
+      // Solid kneewall skirt below the screens, per the configured material.
+      function kneewallMat(solidStyle) {
+        const hex =
+          solidStyle === "vinyl"
+            ? 0xe8e4dc
+            : solidStyle === "hardieboard"
+              ? 0xbfc4c2
+              : 0xdcd0be; // "panel"
+        return solidMat(hex);
+      }
       // Procedural shingle texture: rows of asphalt-shingle courses with offset
       // tab joints. The COLOR doesn't matter to Canny (edges only) — the point is
       // the horizontal course LINES, which tell Canny "this is a shingled roof"
@@ -171,11 +206,17 @@
           fmat = frameMat(fc),
           D = 0.07;
         const pt = unit.panel_type;
+        // Screen-room panel types (2_inch). The kneewall/chairrail/handrail are
+        // structure-wide, not per unit, so they're drawn by buildWall — a screen
+        // unit is just mesh, optionally with a transom above, optionally a door.
+        const isScreen = pt.startsWith("screen");
         const hasTransom = [
           "fixed_transom",
           "fixed_tk",
           "oper_tk",
           "door_t",
+          "screen_t",
+          "screen_door_t",
         ].includes(pt);
         const hasKneewall = [
           "fixed_kneewall",
@@ -183,7 +224,7 @@
           "oper_kneewall",
           "oper_tk",
         ].includes(pt);
-        const isDoor = ["door", "door_t"].includes(pt);
+        const isDoor = ["door", "door_t", "screen_door", "screen_door_t"].includes(pt);
         const isOper = pt.startsWith("oper");
         const isSolid = pt === "solid_panel";
         let tH = unit.transom_h_in > 0 ? unit.transom_h_in / 12 : h * 0.18;
@@ -192,8 +233,9 @@
           tH = kH = h * 0.25;
         }
         if (hasTransom) {
-          const tmat =
-            unit.transom_mat === "glass"
+          const tmat = isScreen
+            ? screenMat()
+            : unit.transom_mat === "glass"
               ? glassMat(0x2b4754, 0.8)
               : solidMat(0xc8bcaa);
           g.add(box(w - fw * 2, tH, D, tmat, w / 2, h - tH / 2, 0));
@@ -205,15 +247,44 @@
         const botY = hasKneewall ? kH + fw : 0;
         const glH = Math.max(0.05, topY - botY);
         const glCY = botY + glH / 2;
-        const mainMat = isSolid
-          ? solidMat(0xdcd0be)
-          : isDoor
-            ? glassMat(0x2f4f5e, 0.74)
-            : isOper
-              ? glassMat(0x2b4754, 0.8)
-              : glassMat(0x2b4754, 0.8);
+        const mainMat = isScreen
+          ? screenMat()
+          : isSolid
+            ? solidMat(0xdcd0be)
+            : isDoor
+              ? glassMat(0x2f4f5e, 0.74)
+              : isOper
+                ? glassMat(0x2b4754, 0.8)
+                : glassMat(0x2b4754, 0.8);
         g.add(box(w - fw * 2, glH, D, mainMat, w / 2, glCY, 0));
-        if (isDoor && ["sliding", "french"].includes(unit.door_style)) {
+        // Screen door: a hinged single leaf, not a slider. Give it its own bold
+        // perimeter stile + a mid rail so Canny reads a DOOR inside the screen
+        // wall — without it the door unit is indistinguishable from a screen bay.
+        if (isScreen && isDoor) {
+          // A hinged screen door: a full-height leaf inside the opening, with a
+          // KICK RAIL low down (~14in above the leaf bottom) and nothing across the
+          // middle. An earlier mid rail at panel centre read as a random horizontal
+          // bar cutting the door in half — real screen doors have no centre rail.
+          // Members are centred on the mesh plane (z=0) and deeper than it, so they
+          // stand proud on BOTH faces — the mirrored front wall flips local +z.
+          const x0 = fw,
+            x1 = w - fw,
+            dw = x1 - x0,
+            topLeaf = botY + glH,
+            sw = fw * 1.1, // stile / rail width
+            kickY = botY + Math.min(1.17, glH * 0.2); // ~14in, clamped on short walls
+          g.add(box(sw, glH, 0.16, fmat, x0 + sw / 2, glCY, 0)); // hinge stile
+          g.add(box(sw, glH, 0.16, fmat, x1 - sw / 2, glCY, 0)); // latch stile
+          g.add(box(dw, sw, 0.16, fmat, w / 2, topLeaf - sw / 2, 0)); // top rail
+          g.add(box(dw, sw, 0.16, fmat, w / 2, botY + sw / 2, 0)); // bottom rail
+          g.add(box(dw, sw * 1.1, 0.16, fmat, w / 2, kickY, 0)); // kick rail
+          // Lever handle on the latch stile, at a believable ~36in.
+          const handleY = botY + Math.min(3.0, glH * 0.5);
+          g.add(
+            box(fw * 1.8, fw * 0.45, fw * 0.9, solidMat(0x888888), x1 - fw * 2.0, handleY, 0.09),
+          );
+        }
+        if (!isScreen && isDoor && ["sliding", "french"].includes(unit.door_style)) {
           // Bold center meeting stile so Canny reads TWO glass panels (a sliding
           // glass door), not a single narrow entry door.
           g.add(box(fw, glH, D * 1.6, fmat, w / 2, glCY, 0.012));
@@ -250,12 +321,15 @@
       // whose correctness depends on which side of the glass it sits on (the dark
       // gable backing) must consult this. Frame members avoid it by being centred
       // on the glass plane and deeper than it, so they stand proud on both faces.
-      function buildWall(wall, fc, roofStyle, shHex, isGable, includeGableWings = true, mirrored = false) {
+      function buildWall(wall, fc, roofStyle, shHex, isGable, includeGableWings = true, mirrored = false, screenOpts = null) {
         const g = new THREE.Group();
         const fw = wall.frame_width_in / 12,
           wallW = wall.width_in / 12,
           wallH = wall.height_in / 12;
         const fmat = frameMat(fc);
+        const isScreenWall = (wall.units || []).some((u) =>
+          (u.panel_type || "").startsWith("screen"),
+        );
         let curX = fw;
         const dividers = []; // x of each frame BETWEEN units, for gable alignment
         for (const unit of wall.units) {
@@ -276,8 +350,41 @@
           g.add(box(postW, wallH - fw * 2, 0.16, fmat, dx, wallH / 2, 0.03));
         }
         g.add(frameBorder(wallW, wallH, 0.12, fw, fmat));
+
+        // ── Screen-room horizontals ────────────────────────────────────────────
+        // Kneewall, chairrail and handrail span the WHOLE wall (they're configured
+        // once for the structure, not per unit), so they're drawn here rather than
+        // in buildPanel. All are centred on the mesh plane (z=0) and deeper than
+        // it, so they stand proud on both faces of the mirrored front wall too.
+        if (isScreenWall && screenOpts) {
+          const kn = screenOpts.kneewall;
+          if (kn && kn.enabled) {
+            const kH = (parseFloat(kn.heightIn) || 0) / 12 || wallH * 0.22;
+            // Opaque skirt drawn OVER the bottom of the screen mesh, plus a cap
+            // rail. Cheaper and more robust than shortening every panel.
+            g.add(box(wallW - fw * 2, kH, 0.11, kneewallMat(kn.solidStyle), wallW / 2, kH / 2, 0));
+            g.add(box(wallW, fw * 1.3, 0.17, fmat, wallW / 2, kH + fw * 0.65, 0));
+          }
+          const cr = screenOpts.chairrail;
+          if (cr && cr.enabled) {
+            const cH = (parseFloat(cr.heightIn) || 0) / 12 || wallH * 0.45;
+            g.add(box(wallW, fw * 1.2, 0.17, fmat, wallW / 2, cH, 0));
+          }
+          // Handrail trumps chairrail in the configurator (setScreenHandrail), so
+          // both never render together. ~36" top rail over evenly spaced pickets.
+          if (screenOpts.handrail && screenOpts.handrail.enabled) {
+            const hH = 3.0;
+            g.add(box(wallW, fw * 1.4, 0.18, fmat, wallW / 2, hH, 0));
+            g.add(box(wallW, fw * 0.9, 0.15, fmat, wallW / 2, 0.35, 0));
+            const gap = 0.45;
+            for (let px = gap; px < wallW - gap * 0.5; px += gap) {
+              g.add(box(fw * 0.5, hH - 0.35, 0.1, fmat, px, 0.35 + (hH - 0.35) / 2, 0));
+            }
+          }
+        }
+
         if (isGable && roofStyle === "gable")
-          g.add(buildGable(wallW, wallH, fw, shHex, wall.gable_glass, fc, dividers, mirrored));
+          g.add(buildGable(wallW, wallH, fw, shHex, wall.gable_glass, fc, dividers, mirrored, isScreenWall));
 
         // Under-existing: wall panels rise to the eave (wallH = the header). Above
         // that, the area up to the EXISTING roof is filled — drawn tall and clipped
@@ -294,16 +401,20 @@
         if (roofStyle === "under_existing") {
           const Df = 0.07;
           const fillH = wallH; // overshoot above the header; clipped to the roofline
+          // A screen room's infill is SCREEN, not glass — otherwise the area above
+          // the header renders as a glass transom over screen walls and FLUX paints
+          // window panes up there.
+          const contMat = isScreenWall ? screenMat() : glassMat(0x2b4754, 0.8);
           if (includeGableWings) {
             const gg = wall.gable_glass;
             const isSolid = !!gg && gg.glassType === "solid";
-            const fillMat = isSolid ? solidMat(0xdcd0be) : glassMat(0x2b4754, 0.8);
+            const fillMat = isSolid ? solidMat(0xdcd0be) : contMat;
             g.add(box(wallW - fw * 2, fillH, Df, fillMat, wallW / 2, wallH + fillH / 2, 0));
             // Header beam at the eave (separates the wall panels from the accent above).
             g.add(box(wallW, fw * 1.4, 0.16, fmat, wallW / 2, wallH, 0));
           } else {
-            // Walls-only: seamless glass continuation, no accent, no header beam here.
-            g.add(box(wallW - fw * 2, fillH, Df, glassMat(0x2b4754, 0.8), wallW / 2, wallH + fillH / 2, 0));
+            // Walls-only: seamless continuation, no accent, no header beam here.
+            g.add(box(wallW - fw * 2, fillH, Df, contMat, wallW / 2, wallH + fillH / 2, 0));
           }
           // Posts continue up through the fill, aligned to the unit dividers.
           // CENTRED on the glass plane (z=0), not pushed to +z: the FRONT wall is
@@ -319,7 +430,7 @@
         return g;
       }
 
-      function buildGable(wallW, wallH, fw, shHex, gableGlass, fc, dividers, mirrored = false) {
+      function buildGable(wallW, wallH, fw, shHex, gableGlass, fc, dividers, mirrored = false, isScreen = false) {
         const g = new THREE.Group();
         const gH = wallH * 0.42,
           peakX = wallW / 2,
@@ -329,6 +440,9 @@
         // Triangular gable face. Glass (with mullions splitting it into the
         // configured number of panes) when gable_glass is set, otherwise the
         // original shingle-matched solid triangle.
+        // On a SCREEN room the non-solid gable is screen mesh, not glass — the
+        // ScreenRoomBuilder even labels it "Gable Screen". Rendering it as tinted
+        // glass made the gable read light/blue against black screen walls below.
         const glassType = gableGlass && gableGlass.glassType;
         const isGlass = !!gableGlass && glassType !== "solid";
         const paneCount = Math.max(1, parseInt(gableGlass && gableGlass.count) || 1);
@@ -343,7 +457,9 @@
         // instead of glass. The sky reflection (now enabled) keeps it from going
         // flat-black.
         const faceMat = isGlass
-          ? glassMat(0x2b4754, 0.8)
+          ? isScreen
+            ? screenMat()
+            : glassMat(0x2b4754, 0.8)
           : gableGlass && glassType === "solid"
             ? solidMat(0xc8bcaa)
             : shingleMat(shHex);
@@ -361,7 +477,9 @@
         // so a fixed -0.2 planted this opaque plate 0.25ft toward the camera and it
         // depth-tested over the gable as a black triangle. Offset away from the
         // face along whichever local direction actually points away from the camera.
-        if (isGlass) {
+        // Screen mesh is already opaque and unlit, so it needs no backing plate —
+        // nothing bleeds through it. Only real glass does.
+        if (isGlass && !isScreen) {
           const gableBack = new THREE.Mesh(
             new THREE.ShapeGeometry(shape),
             // DoubleSide is REQUIRED, not cosmetic: the front wall is mirrored
@@ -895,9 +1013,13 @@
 
         // The gable end (isGable) goes on whichever slot holds wall B: the side
         // wall (bSpec) for BC/3-wall, or the front wall (cSpec) for AB.
+        // Screen rooms: structure-wide kneewall / chairrail / handrail. Null for
+        // every other product line, in which case buildWall draws none of them.
+        const screenOpts = payload.screenOptions || null;
+
         if (bSpec) {
           // Side wall: plain rotation, local +z stays on the camera side.
-          const wallB = buildWall(bSpec, fc, roofStyle, shHex, !gableOnFront, includeGableWings, false);
+          const wallB = buildWall(bSpec, fc, roofStyle, shHex, !gableOnFront, includeGableWings, false, screenOpts);
           wallB.rotation.y = -Math.PI / 2;
           wallB.position.set(0, 0, 0);
           sunroom.add(wallB);
@@ -905,7 +1027,7 @@
 
         if (cSpec) {
           // Front wall: rotation.y=PI + scale.x=-1 ⇒ z-flip, so it's `mirrored`.
-          const wallC = buildWall(cSpec, fc, roofStyle, shHex, gableOnFront, includeGableWings, true);
+          const wallC = buildWall(cSpec, fc, roofStyle, shHex, gableOnFront, includeGableWings, true, screenOpts);
           wallC.rotation.y = Math.PI;
           wallC.scale.x = -1;
           wallC.position.set(0, 0, wallW_B);

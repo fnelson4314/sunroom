@@ -73,6 +73,7 @@ export default function GenerateScreen() {
     underExistingShape: string;
     includeGableWings: string;
     wallCombo: string;
+    screenOptions: string;
     customerName: string;
     customerEmail: string;
     notes: string;
@@ -196,6 +197,7 @@ export default function GenerateScreen() {
             include_gable_wings: params.includeGableWings !== "false",
             wall_combo: params.wallCombo || null,
             wall_corners: params.wall_corners || "",
+            screen_options: params.screenOptions || "",
           },
           null,
           2,
@@ -218,7 +220,11 @@ export default function GenerateScreen() {
         roof_only_sub_style: params.roofOnlySubStyle || null,
         under_existing_shape: params.underExistingShape || null,
         include_gable_wings: params.includeGableWings !== "false",
+        // Was MISSING here while the debug log above printed it — the renderer
+        // logged `wallCombo: MISSING` and fell back to geometric auto-detect.
+        wall_combo: params.wallCombo || null,
         wall_corners: params.wall_corners || "",
+        screen_options: params.screenOptions || "",
       });
 
       // Step 4 — Start polling for status

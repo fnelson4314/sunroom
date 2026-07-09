@@ -1,14 +1,23 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 from app.tasks import generate_sunroom
 from app.database import supabase
 from app.config import validate_uuid
 from app.worker import celery_app
+from app.auth import require_api_key
+from app.rate_limit import rate_limit
 import logging
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Cap generation starts per client. The endpoint spends Replicate credits, so this
+# is the money-protecting limit — generous enough for real use (a person kicks off
+# a handful of renders), tight enough that a loop can't drain the budget. Tune via
+# these constants. Status/cancel are auth-only (polling must not be throttled).
+GENERATE_MAX_PER_WINDOW = 10
+GENERATE_WINDOW_SECONDS = 60
 
 
 class GenerateRequest(BaseModel):
@@ -34,13 +43,20 @@ class GenerateRequest(BaseModel):
     # Which two walls to render (AB → A+B, BC → B+C). All designed walls priced.
     wall_combo: Optional[str] = None
     wall_corners: Optional[str] = ""
+    # Screen rooms (2_inch): structure-wide kneewall / chairrail / handrail as a
+    # JSON string. They run across every wall, so they can't ride in wall_data.
+    screen_options: Optional[str] = ""
 
     class Config:
         extra = "ignore"
 
 
 @router.post("/")
-async def start_generation(body: GenerateRequest):
+async def start_generation(
+    body: GenerateRequest,
+    key: str = Depends(require_api_key),
+    _rl: None = Depends(rate_limit(GENERATE_MAX_PER_WINDOW, GENERATE_WINDOW_SECONDS)),
+):
     validate_uuid(body.session_id)
 
     for option_id in body.selected_options:
@@ -71,6 +87,7 @@ async def start_generation(body: GenerateRequest):
             include_gable_wings=body.include_gable_wings if body.include_gable_wings is not None else True,
             wall_combo=body.wall_combo,
             wall_corners=body.wall_corners or "",
+            screen_options=body.screen_options or "",
         )
         logger.info(f"Task enqueued: {task.id} (wall_system={body.wall_system}, roof_style={body.roof_style})")
 
@@ -94,7 +111,7 @@ async def start_generation(body: GenerateRequest):
 
 
 @router.get("/status/{session_id}")
-def get_generation_status(session_id: str):
+def get_generation_status(session_id: str, key: str = Depends(require_api_key)):
     validate_uuid(session_id)
 
     try:
@@ -135,7 +152,7 @@ def get_generation_status(session_id: str):
         raise HTTPException(status_code=500, detail=str(e))
     
 @router.post("/cancel/{session_id}")
-def cancel_generation(session_id: str):
+def cancel_generation(session_id: str, key: str = Depends(require_api_key)):
     validate_uuid(session_id)
     try:
         # Fetch the task_id

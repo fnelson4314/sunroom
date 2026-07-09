@@ -1,16 +1,13 @@
 import { Colors } from "@/constants/Colors";
-import { Tabs } from "expo-router";
+import { Stack } from "expo-router";
 
+// This group has a single screen (the home session list), so a Tabs navigator
+// just rendered a lone, non-functional "Home" tab with a placeholder chevron at
+// the bottom. A Stack gives the same top "Home" header with no dead tab bar.
 export default function TabLayout() {
   return (
-    <Tabs
+    <Stack
       screenOptions={{
-        tabBarActiveTintColor: Colors.primary,
-        tabBarInactiveTintColor: Colors.text.tertiary,
-        tabBarStyle: {
-          backgroundColor: Colors.surface,
-          borderTopColor: Colors.border,
-        },
         headerStyle: {
           backgroundColor: Colors.background,
         },
@@ -18,13 +15,7 @@ export default function TabLayout() {
         headerShadowVisible: false,
       }}
     >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: "Home",
-          tabBarLabel: "Home",
-        }}
-      />
-    </Tabs>
+      <Stack.Screen name="index" options={{ title: "Home" }} />
+    </Stack>
   );
 }
