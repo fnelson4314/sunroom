@@ -54,6 +54,14 @@ STRUCTURE_DROP_FT = float(os.environ.get("STRUCTURE_DROP_FT", "0"))
 #   5  → five variations in parallel (≈ same wall-clock, ~5× inference credits).
 # Set NUM_VARIATIONS in the backend .env. Clamped to a sane [1, 8].
 NUM_VARIATIONS = max(1, min(8, int(os.environ.get("NUM_VARIATIONS", "1"))))
+# ── Over-generate + auto-filter (OFF by default; FAIL-SAFE) ───────────────────
+# When true: generate OVERGEN_POOL variations, score each with app.judge, and keep
+# only the best NUM_VARIATIONS — so the gallery never shows an obvious dud. If the
+# judge is unavailable or scores too few, we fall back to the first NUM_VARIATIONS
+# unfiltered, so this can only ever HIDE bad renders, never make things worse.
+# Config-lock (canny) is untouched. Costs ~POOL/NUM_VARIATIONS× more inference.
+OVERGEN_FILTER = os.environ.get("OVERGEN_FILTER", "false").lower() == "true"
+OVERGEN_POOL = max(NUM_VARIATIONS, min(8, int(os.environ.get("OVERGEN_POOL", str(NUM_VARIATIONS + 2)))))
 
 
 def _photo_dimensions(photo_bytes: bytes) -> tuple[int, int]:
@@ -424,11 +432,13 @@ def generate_sunroom(
                     )
             return out_url
 
-        n = NUM_VARIATIONS
+        # Over-generate a larger pool when the filter is on, so we can drop duds.
+        n = OVERGEN_POOL if OVERGEN_FILTER else NUM_VARIATIONS
         base_seed = random.randint(1, 2_000_000_000)
         logger.info(
             f"[{session_id}] Running {n} variation(s) "
-            f"(mode={FLUX_REPAINT_MODE}, strength={repaint_strength})"
+            f"(mode={FLUX_REPAINT_MODE}, strength={repaint_strength}"
+            f"{', overgen-filter ON' if OVERGEN_FILTER else ''})"
         )
 
         results: list[str | None] = [None] * n
@@ -452,6 +462,50 @@ def generate_sunroom(
         render_urls = [url for url in results if url]
         if not render_urls:
             raise Exception("all variations failed")
+
+        # Over-generate filter: score the pool, keep the best NUM_VARIATIONS.
+        # FAIL-SAFE — if judging is unavailable or scores too few, fall back to the
+        # first NUM_VARIATIONS unfiltered. Never shows more than NUM_VARIATIONS.
+        if OVERGEN_FILTER and len(render_urls) > NUM_VARIATIONS:
+            try:
+                from app.judge import score_render
+
+                scored: list[tuple[float | None, str]] = []
+                with ThreadPoolExecutor(max_workers=len(render_urls)) as jpool:
+                    jfut = {
+                        jpool.submit(score_render, u, positive_prompt): u
+                        for u in render_urls
+                    }
+                    for f in as_completed(jfut):
+                        try:
+                            scored.append((f.result(), jfut[f]))
+                        except Exception:
+                            scored.append((None, jfut[f]))
+                valid = [(s, u) for s, u in scored if s is not None]
+                if len(valid) >= NUM_VARIATIONS:
+                    valid.sort(key=lambda x: x[0], reverse=True)
+                    kept = [u for _, u in valid[:NUM_VARIATIONS]]
+                    logger.info(
+                        f"[{session_id}] overgen filter: kept {len(kept)}/"
+                        f"{len(render_urls)} (scores "
+                        f"{[round(s, 1) for s, _ in valid]})"
+                    )
+                    render_urls = kept
+                else:
+                    logger.info(
+                        f"[{session_id}] overgen filter: only {len(valid)} scored — "
+                        f"showing first {NUM_VARIATIONS} unfiltered"
+                    )
+                    render_urls = render_urls[:NUM_VARIATIONS]
+            except Exception as jerr:
+                logger.warning(
+                    f"[{session_id}] overgen filter failed ({jerr}) — "
+                    f"showing first {NUM_VARIATIONS} unfiltered"
+                )
+                render_urls = render_urls[:NUM_VARIATIONS]
+        elif OVERGEN_FILTER:
+            # Pool produced <= NUM_VARIATIONS usable renders; nothing to filter.
+            render_urls = render_urls[:NUM_VARIATIONS]
 
         primary_url = render_urls[0]
         # Persist the full list in render_urls; keep render_url = first for the

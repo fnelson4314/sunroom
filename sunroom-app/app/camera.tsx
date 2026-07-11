@@ -38,32 +38,36 @@ function getPointCount(wallCount: WallCount): number {
 
 // ─── Labels ───────────────────────────────────────────────────────────────────
 
+// The two visible walls form an L. The SIDE wall runs back toward the house; the
+// FRONT wall faces the camera. Which letters they carry depends on the combo:
+//   AB → side = A, front = B.    BC → side = B, front = C.
+// (Confirmed by the footprint guide lines: pt3→pt4 is the side wall, pt2→pt4 the
+// front wall — see GuideLines / buildWallCorners.)
+function wallLetters(wallCombo: WallCombo): { side: string; front: string } {
+  return wallCombo === "AB"
+    ? { side: "A", front: "B" }
+    : { side: "B", front: "C" };
+}
+
 function getPointLabels(wallCount: WallCount, wallCombo: WallCombo): string[] {
   if (wallCount === 1) {
+    // Recessed nook: the four corners of the opening the sunroom fills.
     return [
-      "Nook — Top Left",
-      "Nook — Top Right",
-      "Nook — Bottom Right",
-      "Nook — Bottom Left",
+      "Top-left corner of the nook opening (up at the roofline)",
+      "Top-right corner of the nook opening (up at the roofline)",
+      "Bottom-right corner of the nook, down on the ground",
+      "Bottom-left corner of the nook, down on the ground",
     ];
   }
-  // 2- and 3-wall both use the angled 5-point L (front + the visible side).
-  if (wallCombo === "AB") {
-    return [
-      "Left wall — Top (house)",
-      "Right wall — Top (house)",
-      "Right wall — Bottom (ground)",
-      "Left wall — Bottom (ground)",
-      "Front corner — Ground (where walls meet, out in yard)",
-    ];
-  }
-  // BC default
+  // 2- and 3-wall: the angled 5-point L (the front wall + the visible side wall).
+  // Capture order is top-left, top-right, bottom-right, bottom-left, front corner.
+  const { side, front } = wallLetters(wallCombo);
   return [
-    "Left wall — Top (house)",
-    "Right wall — Top (house)",
-    "Right wall — Bottom (ground)",
-    "Left wall — Bottom (ground)",
-    "Front corner — Ground (where walls meet, out in yard)",
+    `Wall ${side} top left`,
+    `Wall ${front} top right`,
+    `Wall ${front} bottom right`,
+    `Wall ${side} bottom left`,
+    `Front corner (green) — the NEAREST ground corner poking out toward you, where Wall ${side} and Wall ${front} meet at the ground`,
   ];
 }
 
@@ -252,9 +256,10 @@ export default function CameraScreen() {
   // relative to THIS element, so we must normalize against its real size — not
   // window.innerWidth/Height, which can differ (DevTools open, browser chrome,
   // resize) and silently push normalized points past 0–1, floating the build.
-  const [overlaySize, setOverlaySize] = useState<{ w: number; h: number } | null>(
-    null,
-  );
+  const [overlaySize, setOverlaySize] = useState<{
+    w: number;
+    h: number;
+  } | null>(null);
   const cameraRef = useRef<CameraView>(null);
 
   // Build type: "new_roof" = today's flow (renderer builds a roof). "under_existing"
@@ -268,7 +273,9 @@ export default function CameraScreen() {
   // Under-existing only: the shape of the EXISTING roof we're building beneath.
   // Drives the trace guidance (gable = trace up to a peak; studio = one slope)
   // and flows to the configurator/prompt.
-  const [existingRoof, setExistingRoof] = useState<"studio" | "gable">("studio");
+  const [existingRoof, setExistingRoof] = useState<"studio" | "gable">(
+    "studio",
+  );
 
   const resetCapture = () => {
     setPoints([]);
@@ -586,8 +593,8 @@ export default function CameraScreen() {
             {isUnderExisting
               ? "Under-Existing: capture the patio, then trace the existing roof edge"
               : wallCount === 1
-              ? "Position the U-shaped nook in frame"
-              : "Position the house wall and patio area in frame (front + one side)"}
+                ? "Position the U-shaped nook in frame"
+                : "Position the house wall and patio area in frame (front + one side)"}
           </Text>
           <View style={styles.captureRow}>
             <Pressable style={styles.uploadButton} onPress={pickFromLibrary}>
@@ -628,62 +635,63 @@ export default function CameraScreen() {
           }
           onStartShouldSetResponder={() => true}
           onResponderGrant={(evt) => {
-          const { locationX, locationY } = evt.nativeEvent;
-          // Roofline-trace phase (under-existing): taps build the roof trace.
-          if (inTracePhase) {
-            const nearT = roofTrace.findIndex(
-              (p) => Math.hypot(p.x - locationX, p.y - locationY) < POINT_RADIUS,
-            );
-            if (nearT !== -1) {
-              setRoofTrace((prev) => prev.slice(0, nearT));
+            const { locationX, locationY } = evt.nativeEvent;
+            // Roofline-trace phase (under-existing): taps build the roof trace.
+            if (inTracePhase) {
+              const nearT = roofTrace.findIndex(
+                (p) =>
+                  Math.hypot(p.x - locationX, p.y - locationY) < POINT_RADIUS,
+              );
+              if (nearT !== -1) {
+                setRoofTrace((prev) => prev.slice(0, nearT));
+                return;
+              }
+              setRoofTrace((prev) => [...prev, { x: locationX, y: locationY }]);
               return;
             }
-            setRoofTrace((prev) => [...prev, { x: locationX, y: locationY }]);
-            return;
-          }
-          if (traceComplete) return; // locked; use "Edit Trace" to reopen
-          const nearIndex = points.findIndex((p) => {
-            const dx = p.x - locationX,
-              dy = p.y - locationY;
-            return Math.sqrt(dx * dx + dy * dy) < POINT_RADIUS;
-          });
-          if (nearIndex !== -1) {
-            setPoints((prev) => prev.slice(0, nearIndex));
-            return;
-          }
-          if (points.length >= totalPoints) return;
-          setPoints((prev) => [...prev, { x: locationX, y: locationY }]);
-        }}
-      >
-        <GuideLines points={points} wallCount={wallCount} />
+            if (traceComplete) return; // locked; use "Edit Trace" to reopen
+            const nearIndex = points.findIndex((p) => {
+              const dx = p.x - locationX,
+                dy = p.y - locationY;
+              return Math.sqrt(dx * dx + dy * dy) < POINT_RADIUS;
+            });
+            if (nearIndex !== -1) {
+              setPoints((prev) => prev.slice(0, nearIndex));
+              return;
+            }
+            if (points.length >= totalPoints) return;
+            setPoints((prev) => [...prev, { x: locationX, y: locationY }]);
+          }}
+        >
+          <GuideLines points={points} wallCount={wallCount} />
 
-        {isUnderExisting && allPlaced && (
-          <RoofTraceLines
-            top0={points[0]}
-            top1={points[1]}
-            trace={roofTrace}
-          />
-        )}
+          {isUnderExisting && allPlaced && (
+            <RoofTraceLines
+              top0={points[0]}
+              top1={points[1]}
+              trace={roofTrace}
+            />
+          )}
 
-        {points.map((pt, i) => (
-          <View
-            key={i}
-            style={[
-              styles.pointDot,
-              {
-                left: pt.x - DOT_RADIUS,
-                top: pt.y - DOT_RADIUS,
-                width: DOT_RADIUS * 2,
-                height: DOT_RADIUS * 2,
-                borderRadius: DOT_RADIUS,
-                // Front corner point (index 4) gets green colour
-                backgroundColor: i === 4 ? "#22cc44" : Colors.primary,
-              },
-            ]}
-          >
-            <Text style={styles.pointDotLabel}>{i + 1}</Text>
-          </View>
-        ))}
+          {points.map((pt, i) => (
+            <View
+              key={i}
+              style={[
+                styles.pointDot,
+                {
+                  left: pt.x - DOT_RADIUS,
+                  top: pt.y - DOT_RADIUS,
+                  width: DOT_RADIUS * 2,
+                  height: DOT_RADIUS * 2,
+                  borderRadius: DOT_RADIUS,
+                  // Front corner point (index 4) gets green colour
+                  backgroundColor: i === 4 ? "#22cc44" : Colors.primary,
+                },
+              ]}
+            >
+              <Text style={styles.pointDotLabel}>{i + 1}</Text>
+            </View>
+          ))}
         </View>
       </View>
 
@@ -698,22 +706,20 @@ export default function CameraScreen() {
         {inTracePhase && (
           <Text style={styles.instructionSub}>
             {existingRoof === "gable"
-              ? "Trace the existing roof underside from point 1 up to the peak and back down to point 2. Then tap “Done Tracing”."
-              : "Tap along the underside of the existing roof from point 1 to point 2 — include the front corner. Then tap “Done Tracing”."}
+              ? "Now trace the underside of the existing roof: start at point 1 (top of the side wall), tap upward to the roof PEAK, then back down to point 2 (top of the front wall). Then tap “Done Tracing”."
+              : "Now trace the underside of the existing roof: tap along its slope from point 1 (top of the side wall) across to point 2 (top of the front wall), following the eave. Then tap “Done Tracing”."}
           </Text>
         )}
         {isUnderExisting && !allPlaced && points.length === 0 && (
           <Text style={styles.instructionSub}>
-            Under-Existing: first place the 4 corners + front corner, then you’ll
-            trace the existing roofline.
+            {`Under-Existing: two walls form an L — Wall ${wallLetters(wallCombo).side} runs back to the house, Wall ${wallLetters(wallCombo).front} runs parallel to the house. First place the 5 corner points, then you'll trace the existing roofline above them.`}
           </Text>
         )}
         {!isUnderExisting && wallCount !== 1 && points.length === 0 && (
           <Text style={styles.instructionSub}>
-            Points 1-4: tap the house wall corners. Point 5 (green): tap the
-            ground where the sunroom front corner will be.
+            {`The two visible walls form an L: Wall ${wallLetters(wallCombo).side} is the SIDE wall running back to the house, Wall ${wallLetters(wallCombo).front} FACES you. Place points 1–4 at their top and bottom corners (top-left, top-right, bottom-right, bottom-left), then point 5 (green) on the ground at the nearest corner where the two walls meet.`}
             {wallCount === 3
-              ? " (3-wall: you'll capture the two visible walls; the 3rd is set in the configurator.)"
+              ? " (3-wall: you capture these two visible walls now; the 3rd wall is priced/added later in the configurator.)"
               : ""}
           </Text>
         )}
@@ -852,7 +858,11 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     borderColor: Colors.primary,
   },
-  wallCountBtnText: { color: "#fff", fontSize: FontSize.body, fontWeight: "600" },
+  wallCountBtnText: {
+    color: "#fff",
+    fontSize: FontSize.body,
+    fontWeight: "600",
+  },
   wallCountBtnTextActive: { color: "#fff" },
   buildTypeRow: {
     flexDirection: "row",
@@ -871,7 +881,11 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     borderColor: Colors.primary,
   },
-  buildTypeBtnText: { color: "#fff", fontSize: FontSize.callout, fontWeight: "700" },
+  buildTypeBtnText: {
+    color: "#fff",
+    fontSize: FontSize.callout,
+    fontWeight: "700",
+  },
   buildTypeBtnTextActive: { color: "#fff" },
   existingRoofRow: {
     flexDirection: "row",
@@ -879,7 +893,11 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 4,
   },
-  existingRoofLabel: { color: "rgba(255,255,255,0.85)", fontSize: FontSize.body, fontWeight: "600" },
+  existingRoofLabel: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: FontSize.body,
+    fontWeight: "600",
+  },
   subTypeBtn: {
     paddingHorizontal: 14,
     paddingVertical: 6,
@@ -999,5 +1017,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.4)",
   },
-  secondaryButtonText: { color: "#fff", fontSize: FontSize.label, fontWeight: "600" },
+  secondaryButtonText: {
+    color: "#fff",
+    fontSize: FontSize.label,
+    fontWeight: "600",
+  },
 });

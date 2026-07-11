@@ -59,7 +59,8 @@ NEGATIVE_PROMPT = (
 SCREEN_NEGATIVE_EXTRA = (
     ", glass walls, glass panels, window panes, windows, glazing, "
     "reflections, sky reflection, mirrored glass, shiny panels, "
-    "sliding glass door, solid walls"
+    "sliding glass door, solid walls, "
+    "brick, brick wall, brick kneewall, red brick, masonry, stone, stone veneer"
 )
 
 # ─── Panel type → readable description ───────────────────────────────────────
@@ -83,8 +84,8 @@ PANEL_TYPE_DESCRIPTIONS = {
     # made FLUX paint window panes over a screened porch.
     "screen":         "charcoal insect screen mesh panel, no glass",
     "screen_t":       "charcoal insect screen mesh panel with a screen transom above, no glass",
-    "screen_door":    "hinged screen door with a mid rail and a lever handle, screen mesh, no glass",
-    "screen_door_t":  "hinged screen door with a screen transom above, screen mesh, no glass",
+    "screen_door":    "hinged full-view screen door, all insect screen mesh divided by a single horizontal mid rail across the middle, with a lever handle, no glass and no solid kick panel",
+    "screen_door_t":  "hinged full-view screen door, all insect screen mesh with a horizontal mid rail across the middle and a screen transom above, with a lever handle, no glass and no solid kick panel",
 }
 
 DOOR_STYLE_DESCRIPTIONS = {
@@ -424,15 +425,21 @@ def build_prompt(
             kn = screen_options.get("kneewall") or {}
             if kn.get("enabled"):
                 style = (kn.get("solidStyle") or "panel").lower()
+                # Describe the siding texture, not just the color — vinyl and
+                # hardieboard read as horizontal lap courses (vinyl a tighter 4in
+                # reveal, hardie a wider 8in), panel is a smooth flat board.
                 style_word = {
-                    "vinyl": "white vinyl",
-                    "hardieboard": "painted fiber-cement",
-                }.get(style, "solid aluminum")
+                    "vinyl": "white vinyl lap siding with MANY clearly visible, closely spaced horizontal lap courses and dark shadow lines, distinct horizontal grooves, not a smooth flat panel",
+                    "hardieboard": "white painted fiber-cement (hardieboard) lap siding with clearly visible, wider-spaced horizontal board courses and shadow lines",
+                }.get(style, "smooth solid aluminum panel")
                 h = kn.get("heightIn") or ""
                 h_txt = f"{h}-inch " if h else ""
                 feats.append(
                     f"a {h_txt}{style_word} kneewall skirt running along the bottom "
-                    "of every screen wall, below the screen mesh"
+                    "of every screen wall below the screen mesh, stopping at any door "
+                    "opening (no kneewall across the door); this lower kneewall is "
+                    "white painted siding, NOT brick, NOT a brick wall, NOT masonry, "
+                    "NOT stone, NOT a red brick foundation"
                 )
             cr = screen_options.get("chairrail") or {}
             if cr.get("enabled"):
@@ -444,8 +451,11 @@ def build_prompt(
                 )
             if (screen_options.get("handrail") or {}).get("enabled"):
                 feats.append(
-                    "an aluminum handrail with evenly spaced vertical pickets running "
-                    "along the bottom of every screen wall"
+                    "a white aluminum handrail with THIN, closely spaced narrow vertical "
+                    "balusters set behind the insect screen in the lower part of every "
+                    "screen wall — the screen mesh continues unbroken over it, the "
+                    "slim balusters are visible through/behind the screen, NOT thick "
+                    "bars and NOT replacing the screen"
                 )
             if feats:
                 screen_fragment = ", ".join(feats) + ", "

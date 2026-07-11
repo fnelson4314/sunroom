@@ -13,6 +13,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 
@@ -99,6 +100,13 @@ export default function QuoteScreen() {
   const [beforeErr, setBeforeErr] = useState(false);
   const [afterErr, setAfterErr] = useState(false);
 
+  // Manual sales inputs (ephemeral — not persisted): the factory-direct discount %,
+  // the same-day YES-program discount %, and an optional deposit. These drive the
+  // discounted totals + financing on both the screen and the PDF's 2nd page.
+  const [fdPctStr, setFdPctStr] = useState("");
+  const [yesPctStr, setYesPctStr] = useState("");
+  const [depositStr, setDepositStr] = useState("");
+
   useEffect(() => {
     const fetchSession = async () => {
       try {
@@ -134,13 +142,81 @@ export default function QuoteScreen() {
   const totalFormatted =
     parsedTotal > 0 ? `$${parsedTotal.toLocaleString()}` : "TBD";
 
-  // Financing — monthly estimates from the total (with discounts). Option 1 is
-  // deferred (no payment / no interest); options 2 & 3 use the lender's
-  // per-dollar payment factors. Keep these factors in sync with the PDF section.
+  // Financing — monthly estimates. Option 1 is deferred (no payment / no interest);
+  // options 2 & 3 use the lender's per-dollar payment factors. Keep in sync w/ PDF.
   const fmtMoney = (n: number) =>
-    n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const opt2Monthly = parsedTotal > 0 ? `$${fmtMoney(parsedTotal * 0.0198)}` : "—";
-  const opt3Monthly = parsedTotal > 0 ? `$${fmtMoney(parsedTotal * 0.0107)}` : "—";
+    n.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  // PDF page 1 (unchanged) still shows financing on the MSRP.
+  const opt2Monthly =
+    parsedTotal > 0 ? `$${fmtMoney(parsedTotal * 0.0198)}` : "—";
+  const opt3Monthly =
+    parsedTotal > 0 ? `$${fmtMoney(parsedTotal * 0.0107)}` : "—";
+  const OPT2_FACTOR = 0.0198;
+  const OPT3_FACTOR = 0.0107;
+  const FIN_FEATS = [
+    "Unsecured",
+    "No prepayment penalties",
+    "No closing costs",
+    "No fees",
+  ];
+  const monthlyFor = (principal: number, factor: number) =>
+    principal > 0 ? `$${fmtMoney(principal * factor)}` : "—";
+
+  // ─── Discounts (manual inputs) → discounted totals ───────────────────────────
+  const msrp = parsedTotal;
+  const money = (n: number) =>
+    `$${Math.round(Math.max(0, n)).toLocaleString()}`;
+  const fdPct = Math.max(0, Math.min(100, parseFloat(fdPctStr) || 0));
+  // Clamp YES% so the two discounts never exceed 100% of MSRP (total ≥ 0).
+  const yesPct = Math.max(0, Math.min(100 - fdPct, parseFloat(yesPctStr) || 0));
+  const deposit = Math.max(0, parseFloat(depositStr) || 0);
+  const fdSavings = (msrp * fdPct) / 100;
+  const factoryDirectInvestment = Math.max(0, msrp - fdSavings); // MSRP − factory savings
+  const yesSavings = (msrp * yesPct) / 100; // YES discount is on the ORIGINAL MSRP
+  const totalInvestment = Math.max(0, msrp - fdSavings - yesSavings); // final price, both discounts
+  const amountFinanced = Math.max(0, totalInvestment - deposit); // what actually gets financed
+
+  // Three financing cards for a given principal (reused on-screen twice).
+  const renderFinanceCards = (principal: number) => (
+    <View style={styles.financeGrid}>
+      <View style={styles.financeCard}>
+        <Text style={styles.finTerm}>OPTION 1 · 12 MONTHS</Text>
+        <Text style={styles.finAmt}>
+          $0<Text style={styles.finAmtUnit}> /mo</Text>
+        </Text>
+        <Text style={styles.finHeadline}>
+          No Payments & No Interest for 12 months
+        </Text>
+      </View>
+      <View style={styles.financeCard}>
+        <Text style={styles.finTerm}>OPTION 2 · 6.99% · 5 YEARS</Text>
+        <Text style={styles.finAmt}>
+          {monthlyFor(principal, OPT2_FACTOR)}
+          <Text style={styles.finAmtUnit}> /mo</Text>
+        </Text>
+        {FIN_FEATS.map((f) => (
+          <Text key={f} style={styles.finFeat}>
+            ✓ {f}
+          </Text>
+        ))}
+      </View>
+      <View style={styles.financeCard}>
+        <Text style={styles.finTerm}>OPTION 3 · 9.99% · 180 MONTHS</Text>
+        <Text style={styles.finAmt}>
+          {monthlyFor(principal, OPT3_FACTOR)}
+          <Text style={styles.finAmtUnit}> /mo</Text>
+        </Text>
+        {FIN_FEATS.map((f) => (
+          <Text key={f} style={styles.finFeat}>
+            ✓ {f}
+          </Text>
+        ))}
+      </View>
+    </View>
+  );
 
   const notes = session?.notes || "";
   const widthFt = session?.width_ft;
@@ -161,6 +237,26 @@ export default function QuoteScreen() {
   const beforeUrl = photoUri || session?.house_photo_url || "";
 
   // ─── PDF ──────────────────────────────────────────────────
+
+  // Three financing cards (HTML) for a given principal — reused on PDF page 2.
+  const financeCardsHTML = (principal: number) => `
+    <div class="finance-grid">
+      <div class="finance-card">
+        <div class="fin-term">Option 1 &middot; 12 Months</div>
+        <div class="fin-amt">$0<span> /mo</span></div>
+        <div class="fin-headline">No Payments &amp; No Interest for 12 months</div>
+      </div>
+      <div class="finance-card">
+        <div class="fin-term">Option 2 &middot; 6.99% &middot; 5 Years</div>
+        <div class="fin-amt">${principal > 0 ? "$" + fmtMoney(principal * OPT2_FACTOR) : "&mdash;"}<span> /mo</span></div>
+        <ul class="fin-feats"><li>Unsecured</li><li>No prepayment penalties</li><li>No closing costs</li><li>No fees</li></ul>
+      </div>
+      <div class="finance-card">
+        <div class="fin-term">Option 3 &middot; 9.99% &middot; 180 Months</div>
+        <div class="fin-amt">${principal > 0 ? "$" + fmtMoney(principal * OPT3_FACTOR) : "&mdash;"}<span> /mo</span></div>
+        <ul class="fin-feats"><li>Unsecured</li><li>No prepayment penalties</li><li>No closing costs</li><li>No fees</li></ul>
+      </div>
+    </div>`;
 
   const buildQuoteHTML = (beforeDataUri: string, afterDataUri: string) => {
     const breakdownRows =
@@ -291,6 +387,29 @@ export default function QuoteScreen() {
   .fin-feats li { font-size: 10.5px; color: #4b5563; padding-left: 13px; position: relative; line-height: 1.65; }
   .fin-feats li:before { content: "\\2713"; position: absolute; left: 0; color: #0A4A9F; font-weight: 700; }
   .fin-note { font-size: 9px; color: #9ca3af; line-height: 1.5; margin-bottom: 18px; }
+  /* ── Page 2: investment detail ── */
+  .page2 { page-break-before: always; padding-top: 6px; }
+  .msrp-line {
+    display: flex; justify-content: space-between; align-items: baseline;
+    background: #f6f8fb; border-radius: 10px; padding: 16px 20px; margin-bottom: 4px;
+  }
+  .msrp-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: #6b7280; }
+  .msrp-value { font-size: 26px; font-weight: 800; color: #1b232e; }
+  .promo-line { display: flex; justify-content: space-between; align-items: center; padding: 7px 2px; font-size: 12.5px; color: #374151; }
+  .promo-line .save { font-weight: 700; color: #1C6B45; }
+  .invest-line {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 11px 2px; border-top: 1px solid #e5e7eb; margin-top: 4px;
+  }
+  .invest-line span:first-child { font-weight: 600; color: #1b232e; }
+  .invest-line .amt { font-size: 17px; font-weight: 800; color: #1b232e; }
+  .invest-line.strong {
+    border: 1.5px solid #0A4A9F; border-radius: 10px; background: #f6f8fb;
+    padding: 12px 16px; margin-top: 10px;
+  }
+  .invest-line.strong span:first-child { color: #0A4A9F; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; font-size: 13px; }
+  .invest-line.strong .amt { font-size: 22px; color: #1C6B45; }
+  .fin-basis { font-size: 10.5px; font-weight: 600; color: #6b7280; margin: 12px 0 8px; }
 </style>
 </head>
 <body>
@@ -366,37 +485,50 @@ ${
     : ""
 }
 
-<div class="divider"></div>
-<div class="label" style="margin-bottom:12px">Financing Options</div>
-<div class="finance-grid">
-  <div class="finance-card">
-    <div class="fin-term">Option 1 &middot; 12 Months</div>
-    <div class="fin-amt">$0<span> /mo</span></div>
-    <div class="fin-headline">No Payments &amp; No Interest for 12 months</div>
-  </div>
-  <div class="finance-card">
-    <div class="fin-term">Option 2 &middot; 6.99% &middot; 5 Years</div>
-    <div class="fin-amt">${opt2Monthly}<span> /mo</span></div>
-    <ul class="fin-feats">
-      <li>Unsecured</li><li>No prepayment penalties</li>
-      <li>No closing costs</li><li>No fees</li>
-    </ul>
-  </div>
-  <div class="finance-card">
-    <div class="fin-term">Option 3 &middot; 9.99% &middot; 180 Months</div>
-    <div class="fin-amt">${opt3Monthly}<span> /mo</span></div>
-    <ul class="fin-feats">
-      <li>Unsecured</li><li>No prepayment penalties</li>
-      <li>No closing costs</li><li>No fees</li>
-    </ul>
-  </div>
-</div>
-<div class="fin-note">Estimated monthly payments are based on the total investment with discounts and are subject to credit approval. Financing provided by a third party; actual payment may vary.</div>
-
 <div class="footer">
   This proposal is an estimate based on the selected configuration and is subject to site inspection.<br/>
   Final pricing may vary based on structural requirements, permits, and site conditions.<br/>
   <span class="validity">Valid for 30 days · ${today}</span>
+</div>
+
+<div class="page2">
+  <div class="header" style="margin-bottom:18px">
+    <div>
+      <div class="company">CHAMPION</div>
+      <div class="tagline">Your Investment &amp; Financing</div>
+    </div>
+    <div class="meta-right">
+      <div class="meta-kicker">Sunroom Proposal</div>
+      <div class="quote-num">${quoteNumber}</div>
+    </div>
+  </div>
+
+  <div class="msrp-line">
+    <span class="msrp-label">Suggested Retail (MSRP)</span>
+    <span class="msrp-value">${totalFormatted}</span>
+  </div>
+
+  <div class="divider"></div>
+  <div class="label" style="margin-bottom:8px">Factory Direct Promotion</div>
+  <div class="promo-line"><span>Factory Direct Savings${fdPct ? " (" + fdPct + "%)" : ""}</span><span class="save">&minus;${money(fdSavings)}</span></div>
+  <div class="invest-line"><span>Factory Direct Investment</span><span class="amt">${money(factoryDirectInvestment)}</span></div>
+  <div class="fin-basis">Monthly options based on your Factory Direct Investment</div>
+  ${financeCardsHTML(factoryDirectInvestment)}
+
+  <div class="divider"></div>
+  <div class="label" style="margin-bottom:8px">YES! Program</div>
+  <div class="promo-line"><span>Additional Savings${yesPct ? " (" + yesPct + "%)" : ""}</span><span class="save">&minus;${money(yesSavings)}</span></div>
+  <div class="invest-line strong"><span>Total Investment</span><span class="amt">${money(totalInvestment)}</span></div>
+  ${
+    deposit > 0
+      ? `<div class="promo-line"><span>Deposit</span><span class="save">&minus;${money(deposit)}</span></div>
+         <div class="invest-line"><span>Amount Financed</span><span class="amt">${money(amountFinanced)}</span></div>`
+      : ""
+  }
+  <div class="fin-basis">Monthly options based on your Total Investment${deposit > 0 ? " (after deposit)" : ""}</div>
+  ${financeCardsHTML(amountFinanced)}
+
+  <div class="fin-note">Estimated monthly payments are subject to credit approval. Financing provided by a third party; actual payment may vary.</div>
 </div>
 
 </body>
@@ -471,7 +603,9 @@ ${
         <View style={styles.header}>
           <View>
             <Text style={styles.company}>CHAMPION</Text>
-            <Text style={styles.tagline}>WINDOWS • SUNROOMS • HOME EXTERIORS</Text>
+            <Text style={styles.tagline}>
+              WINDOWS • SUNROOMS • HOME EXTERIORS
+            </Text>
           </View>
           <View style={styles.metaRight}>
             <Text style={styles.quoteNumber}>{quoteNumber}</Text>
@@ -526,7 +660,7 @@ ${
         <View style={styles.divider} />
 
         {/* Before / After */}
-        {(beforeUrl || afterUrl) && (
+        {!!(beforeUrl || afterUrl) && (
           <>
             <Text style={styles.sectionLabel}>DESIGN VISUALIZATION</Text>
             <View style={styles.photoRow}>
@@ -635,6 +769,95 @@ ${
           </View>
         </View>
 
+        {/* ─── Factory Direct Promotion ─── */}
+        <View style={styles.divider} />
+        <Text style={styles.sectionLabel}>
+          FACTORY DIRECT PROMOTION (SAVINGS)
+        </Text>
+        <View style={styles.promoRow}>
+          <View style={styles.pctFieldWrap}>
+            <TextInput
+              style={styles.pctInput}
+              value={fdPctStr}
+              onChangeText={setFdPctStr}
+              keyboardType="decimal-pad"
+              placeholder="0"
+              placeholderTextColor="#C0BCB5"
+            />
+            <Text style={styles.pctSign}>% off MSRP</Text>
+          </View>
+          <View style={styles.savingsPill}>
+            <Text style={styles.savingsPillLabel}>Discount</Text>
+            <Text style={styles.savingsPillValue}>−{money(fdSavings)}</Text>
+          </View>
+        </View>
+        <View style={styles.investRow}>
+          <Text style={styles.investLabel}>Factory Direct Investment</Text>
+          <Text style={styles.investValue}>
+            {money(factoryDirectInvestment)}
+          </Text>
+        </View>
+        <Text style={styles.finBasis}>
+          Monthly options based on your Factory Direct Investment
+        </Text>
+        {renderFinanceCards(factoryDirectInvestment)}
+
+        {/* ─── YES! Program ─── */}
+        <View style={styles.divider} />
+        <Text style={styles.sectionLabel}>YES! PROGRAM</Text>
+        <View style={styles.promoRow}>
+          <View style={styles.pctFieldWrap}>
+            <TextInput
+              style={styles.pctInput}
+              value={yesPctStr}
+              onChangeText={setYesPctStr}
+              keyboardType="decimal-pad"
+              placeholder="0"
+              placeholderTextColor="#C0BCB5"
+            />
+            <Text style={styles.pctSign}>% off MSRP</Text>
+          </View>
+          <View style={styles.savingsPill}>
+            <Text style={styles.savingsPillLabel}>Discount</Text>
+            <Text style={styles.savingsPillValue}>−{money(yesSavings)}</Text>
+          </View>
+        </View>
+        <View style={[styles.investRow, styles.investRowStrong]}>
+          <Text style={styles.investLabelStrong}>TOTAL INVESTMENT</Text>
+          <Text style={styles.investValueStrong}>{money(totalInvestment)}</Text>
+        </View>
+        <View style={styles.promoRow}>
+          <Text style={styles.depositLabel}>Deposit (optional)</Text>
+          <View style={styles.moneyField}>
+            <Text style={styles.moneySign}>$</Text>
+            <TextInput
+              style={styles.moneyInput}
+              value={depositStr}
+              onChangeText={setDepositStr}
+              keyboardType="decimal-pad"
+              placeholder="0"
+              placeholderTextColor="#C0BCB5"
+            />
+          </View>
+        </View>
+        {deposit > 0 ? (
+          <View style={styles.investRow}>
+            <Text style={styles.investLabel}>
+              Amount Financed (after deposit)
+            </Text>
+            <Text style={styles.investValue}>{money(amountFinanced)}</Text>
+          </View>
+        ) : null}
+        <Text style={styles.finBasis}>
+          Monthly options based on your Total Investment
+          {deposit > 0 ? " (after deposit)" : ""}
+        </Text>
+        {renderFinanceCards(amountFinanced)}
+        <Text style={styles.finNote}>
+          Estimated monthly payments are subject to credit approval. Financing
+          provided by a third party; actual payment may vary.
+        </Text>
+
         {/* Notes */}
         {notes ? (
           <>
@@ -645,54 +868,6 @@ ${
             </View>
           </>
         ) : null}
-
-        {/* Financing */}
-        <View style={styles.divider} />
-        <Text style={styles.sectionLabel}>FINANCING OPTIONS</Text>
-        <View style={styles.financeGrid}>
-          <View style={styles.financeCard}>
-            <Text style={styles.finTerm}>OPTION 1 · 12 MONTHS</Text>
-            <Text style={styles.finAmt}>
-              $0<Text style={styles.finAmtUnit}> /mo</Text>
-            </Text>
-            <Text style={styles.finHeadline}>
-              No Payments & No Interest for 12 months
-            </Text>
-          </View>
-          <View style={styles.financeCard}>
-            <Text style={styles.finTerm}>OPTION 2 · 6.99% · 5 YEARS</Text>
-            <Text style={styles.finAmt}>
-              {opt2Monthly}
-              <Text style={styles.finAmtUnit}> /mo</Text>
-            </Text>
-            {["Unsecured", "No prepayment penalties", "No closing costs", "No fees"].map(
-              (f) => (
-                <Text key={f} style={styles.finFeat}>
-                  ✓ {f}
-                </Text>
-              ),
-            )}
-          </View>
-          <View style={styles.financeCard}>
-            <Text style={styles.finTerm}>OPTION 3 · 9.99% · 180 MONTHS</Text>
-            <Text style={styles.finAmt}>
-              {opt3Monthly}
-              <Text style={styles.finAmtUnit}> /mo</Text>
-            </Text>
-            {["Unsecured", "No prepayment penalties", "No closing costs", "No fees"].map(
-              (f) => (
-                <Text key={f} style={styles.finFeat}>
-                  ✓ {f}
-                </Text>
-              ),
-            )}
-          </View>
-        </View>
-        <Text style={styles.finNote}>
-          Estimated monthly payments are based on the total investment with
-          discounts and are subject to credit approval. Financing provided by a
-          third party; actual payment may vary.
-        </Text>
 
         {/* Validity */}
         <View style={styles.validityBadge}>
@@ -814,19 +989,153 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 6,
   },
-  finAmtUnit: { fontSize: FontSize.caption, fontWeight: "600", color: Colors.text.secondary },
+  finAmtUnit: {
+    fontSize: FontSize.caption,
+    fontWeight: "600",
+    color: Colors.text.secondary,
+  },
   finHeadline: {
     fontSize: FontSize.caption,
     fontWeight: "600",
     color: Colors.text.primary,
     lineHeight: 18,
   },
-  finFeat: { fontSize: FontSize.caption, color: Colors.text.secondary, lineHeight: 20 },
+  finFeat: {
+    fontSize: FontSize.caption,
+    color: Colors.text.secondary,
+    lineHeight: 20,
+  },
   finNote: {
     fontSize: FontSize.tiny,
     color: Colors.text.tertiary,
     lineHeight: 16,
     marginTop: 10,
+  },
+  finBasis: {
+    fontSize: FontSize.small,
+    color: Colors.text.secondary,
+    fontWeight: "600",
+    marginTop: 18,
+    marginBottom: 10,
+  },
+
+  // ── Discount inputs + tiered totals ──
+  // A % input on the left, a green savings pill on the right.
+  promoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    marginTop: 10,
+  },
+  pctFieldWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  pctInput: {
+    borderWidth: 1,
+    borderColor: "#DAD6CE",
+    borderRadius: 10,
+    backgroundColor: "#fff",
+    fontSize: FontSize.title,
+    fontWeight: "800",
+    color: Colors.primary,
+    width: 96,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    textAlign: "center",
+  },
+  pctSign: { fontSize: FontSize.callout, fontWeight: "600", color: "#8A8880" },
+  savingsPill: {
+    alignItems: "flex-end",
+    backgroundColor: "#EAF5EE",
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    minWidth: 132,
+  },
+  savingsPillLabel: {
+    fontSize: FontSize.tiny,
+    letterSpacing: 1,
+    color: "#5A8C6A",
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  savingsPillValue: {
+    fontSize: FontSize.label,
+    fontWeight: "800",
+    color: "#1C6B45",
+    marginTop: 1,
+  },
+  // Tier total (Factory Direct Investment, Amount Financed) — a light card so the
+  // number is easy to pick out, not lost in a plain row.
+  investRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#F5F3EF",
+    borderRadius: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    marginTop: 14,
+  },
+  investLabel: { fontSize: FontSize.callout, fontWeight: "600", color: "#3A3A3C" },
+  investValue: {
+    fontSize: FontSize.title,
+    fontWeight: "800",
+    color: "#1C1C1E",
+    letterSpacing: -0.3,
+  },
+  // TOTAL INVESTMENT — the hero card. Roomy padding (was cramped/clipped) and
+  // clear space below before the deposit row.
+  investRowStrong: {
+    backgroundColor: "#EEF4FB",
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    borderRadius: 14,
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    marginTop: 22,
+    marginBottom: 18,
+  },
+  investLabelStrong: {
+    fontSize: FontSize.label,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+    color: Colors.primary,
+  },
+  investValueStrong: {
+    fontSize: FontSize.largeTitle,
+    fontWeight: "800",
+    color: "#1C6B45",
+    letterSpacing: -0.5,
+  },
+  depositLabel: {
+    fontSize: FontSize.callout,
+    fontWeight: "600",
+    color: "#5A5854",
+  },
+  moneyField: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderWidth: 1,
+    borderColor: "#DAD6CE",
+    borderRadius: 10,
+    backgroundColor: "#fff",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    minWidth: 150,
+  },
+  moneySign: { fontSize: FontSize.label, fontWeight: "700", color: "#8A8880" },
+  moneyInput: {
+    flex: 1,
+    fontSize: FontSize.label,
+    fontWeight: "700",
+    color: "#1C1C1E",
+    paddingVertical: 4,
+    textAlign: "right",
   },
   sectionLabel: {
     fontSize: FontSize.caption,
@@ -844,8 +1153,16 @@ const styles = StyleSheet.create({
   customerEmail: { fontSize: FontSize.body, color: "#8A8880" },
   specsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   specItem: { minWidth: "45%", gap: 1 },
-  specLabel: { fontSize: FontSize.caption, letterSpacing: 1.2, color: "#C0BCB5" },
-  specValue: { fontSize: FontSize.callout, fontWeight: "600", color: "#1C1C1E" },
+  specLabel: {
+    fontSize: FontSize.caption,
+    letterSpacing: 1.2,
+    color: "#C0BCB5",
+  },
+  specValue: {
+    fontSize: FontSize.callout,
+    fontWeight: "600",
+    color: "#1C1C1E",
+  },
 
   divider: { height: 1, backgroundColor: "#E8E4DC", marginVertical: 20 },
 
@@ -913,9 +1230,21 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0.5,
     borderBottomColor: "#F2F0EB",
   },
-  priceRowName: { fontSize: FontSize.body, fontWeight: "500", color: "#1C1C1E" },
-  priceRowDetail: { fontSize: FontSize.small, color: "#A8A49C", lineHeight: 18 },
-  priceRowValue: { fontSize: FontSize.body, fontWeight: "600", color: "#1C1C1E" },
+  priceRowName: {
+    fontSize: FontSize.body,
+    fontWeight: "500",
+    color: "#1C1C1E",
+  },
+  priceRowDetail: {
+    fontSize: FontSize.small,
+    color: "#A8A49C",
+    lineHeight: 18,
+  },
+  priceRowValue: {
+    fontSize: FontSize.body,
+    fontWeight: "600",
+    color: "#1C1C1E",
+  },
   totalRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -995,5 +1324,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#E8E4DC",
   },
-  secondaryButtonText: { fontSize: FontSize.small, fontWeight: "600", color: "#5A5854" },
+  secondaryButtonText: {
+    fontSize: FontSize.small,
+    fontWeight: "600",
+    color: "#5A5854",
+  },
 });
