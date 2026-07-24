@@ -1,10 +1,14 @@
+import InstructionBanner from "@/components/camera/InstructionBanner";
+import FlowNav from "@/components/FlowNav";
 import { Colors } from "@/constants/Colors";
 import { FontSize } from "@/constants/Typography";
-import { getFullCatalog } from "@/services/api";
+import { useDesignSession } from "@/contexts/DesignSession";
+import { getFullCatalog, getSession } from "@/services/api";
+import { CAPTURE_CORNER_TOP_POINT } from "@/services/config";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
-import { router } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { router, useLocalSearchParams, useNavigation } from "expo-router";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Dimensions,
   Image,
@@ -34,6 +38,31 @@ function getPointCount(wallCount: WallCount): number {
   // a 3rd wall is config/pricing-only (the hidden far return). Only 1-wall (a
   // recessed nook) is captured as a flat 4-point rectangle.
   return wallCount === 1 ? 4 : 5;
+}
+
+// OPTIONAL 6th point: the TOP of the near corner post. The 5 required markers
+// never pin it (two house-side tops + three ground points), so on a capture with
+// any inconsistency the solve leaves a family of poses that all fit yet disagree
+// about where that corner top lands, and the drawn corner DROOPS. pnp.js takes a
+// 6th correspondence at [0, wallH, wallW_B] and the auto-height sweep is then
+// forced to seat the corner top on the clicked pixel.
+//
+// OPTIONAL, and OFF by default (CAPTURE_CORNER_TOP_POINT in services/config.ts).
+// It only helps when there is something real to click — a LORA capture, or any
+// re-creation of a structure that already exists. On a genuine new-build quote
+// the corner post isn't there yet, and an ESTIMATED click is worse than none: it
+// enters the solve as a hard constraint and drags the whole box toward the guess
+// (see sunroom-3d/test_corner_top.js, "guessed" row). Under-existing never
+// offers it — server.js already lifts the same correspondence out of the
+// roofline trace.
+function getMaxPointCount(
+  wallCount: WallCount,
+  isUnderExisting: boolean,
+): number {
+  const required = getPointCount(wallCount);
+  return CAPTURE_CORNER_TOP_POINT && wallCount !== 1 && !isUnderExisting
+    ? required + 1
+    : required;
 }
 
 // ─── Labels ───────────────────────────────────────────────────────────────────
@@ -68,6 +97,7 @@ function getPointLabels(wallCount: WallCount, wallCombo: WallCombo): string[] {
     `Wall ${front} bottom right`,
     `Wall ${side} bottom left`,
     `Front corner (green) — the NEAREST ground corner poking out toward you, where Wall ${side} and Wall ${front} meet at the ground`,
+    `OPTIONAL — corner post TOP (orange): straight up from the green point, where the two wall tops meet at the eave. Only if it's really there (an existing structure); skip it on a new build`,
   ];
 }
 
@@ -90,9 +120,13 @@ function buildWallCorners(
   // 2- and 3-wall: pass all 5 points — renderer uses them for perspective
   // placement and draws the two visible walls (front + near side). A 3rd wall is
   // priced/built via the configurator but never rendered (it's off-camera).
-  // pt0=left-top, pt1=right-top, pt2=right-bottom, pt3=left-bottom, pt4=front-corner-ground
+  // pt0=left-top, pt1=right-top, pt2=right-bottom, pt3=left-bottom,
+  // pt4=front-corner-ground, pt5=front-corner-TOP (new-roof captures only —
+  // pnp.js reads it as the 6th correspondence; under-existing has 5 here and the
+  // renderer derives the same point from the roofline trace).
+  const five = [p(0), p(1), p(2), p(3), p(4)];
   return {
-    _5pt: [p(0), p(1), p(2), p(3), p(4)],
+    _5pt: pts.length >= 6 ? [...five, p(5)] : five,
   };
 }
 
@@ -128,6 +162,9 @@ function GuideLines({
       [3, 0], // left side of house wall
       [3, 4], // left bottom → front corner (Wall B footprint)
       [2, 4], // right bottom → front corner (Wall C footprint)
+      [4, 5], // front corner → its TOP (the corner post itself)
+      [0, 5], // side wall top rail
+      [1, 5], // front wall top rail
     ];
   }
 
@@ -233,9 +270,16 @@ function getInstruction(
   wallCount: WallCount,
   wallCombo: WallCombo,
   nextIndex: number,
+  isUnderExisting: boolean,
 ): string {
   const labels = getPointLabels(wallCount, wallCombo);
   const total = getPointCount(wallCount);
+  const max = getMaxPointCount(wallCount, isUnderExisting);
+  // Past the required points but the optional corner top is still open: offer it
+  // rather than declaring the capture finished.
+  if (nextIndex >= total && nextIndex < max) {
+    return `Point ${nextIndex + 1} (optional): ${labels[nextIndex]}`;
+  }
   if (nextIndex >= total) return "All points placed — confirm when ready";
   return `Point ${nextIndex + 1} of ${total}: ${labels[nextIndex]}`;
 }
@@ -277,6 +321,18 @@ export default function CameraScreen() {
     "studio",
   );
 
+  const params = useLocalSearchParams<{ draftId?: string }>();
+  const { draftId: sessionDraftId, reachStep, resetSession } =
+    useDesignSession();
+  // A draftId to carry forward: the one we were opened with (returning to edit
+  // points) or the shared session's.
+  const draftId = params.draftId || sessionDraftId || "";
+
+  const navigation = useNavigation();
+  useLayoutEffect(() => {
+    navigation.setOptions({ headerTitle: () => <FlowNav current={0} /> });
+  }, [navigation]);
+
   const resetCapture = () => {
     setPoints([]);
     setRoofTrace([]);
@@ -286,6 +342,39 @@ export default function CameraScreen() {
   useEffect(() => {
     getFullCatalog().catch(() => {});
   }, []);
+
+  // Returning to re-plot points on an existing design: load its saved photo and
+  // capture presets and drop straight into review mode. The wall config stays
+  // put (it lives on the draft row and is untouched here) — only the points and
+  // photo can change, which is exactly what should force a re-render later.
+  useEffect(() => {
+    if (!params.draftId) {
+      // Fresh capture from Home → start a brand-new design.
+      resetSession(null);
+      reachStep(0);
+      return;
+    }
+    reachStep(0);
+    (async () => {
+      try {
+        const s = await getSession(params.draftId!);
+        const meta = (s?.draft_state?._meta ?? {}) as Record<string, string>;
+        const photo = s?.house_photo_url || meta.photoUri;
+        if (photo) {
+          setPhotoUri(photo);
+          setMode("review");
+        }
+        if (meta.preset_wall_count)
+          setWallCount(Number(meta.preset_wall_count) as WallCount);
+        if (meta.preset_roof_style === "under_existing")
+          setBuildType("under_existing");
+        if (meta.preset_existing_roof === "gable" || meta.preset_existing_roof === "studio")
+          setExistingRoof(meta.preset_existing_roof);
+      } catch (e) {
+        console.warn("Could not load design for re-plot:", e);
+      }
+    })();
+  }, [params.draftId]);
 
   useEffect(() => {
     if (!photoUri) return;
@@ -303,13 +392,21 @@ export default function CameraScreen() {
       .catch(() => {});
   }, [photoUri]);
 
-  const totalPoints = getPointCount(wallCount);
-  const allPlaced = points.length >= totalPoints;
   const isUnderExisting = buildType === "under_existing";
+  const totalPoints = getPointCount(wallCount);
+  // Taps beyond the required set are accepted up to maxPoints (the optional
+  // corner top) — but the capture is complete, and Confirm live, at totalPoints.
+  const maxPoints = getMaxPointCount(wallCount, isUnderExisting);
+  const allPlaced = points.length >= totalPoints;
   // After the 5 points are placed, under-existing enters the roofline-trace phase
   // until the user taps "Done Tracing".
   const inTracePhase = isUnderExisting && allPlaced && !traceComplete;
   const readyToConfirm = allPlaced && (!isUnderExisting || traceComplete);
+  const instructionMainLine = inTracePhase
+    ? `Trace the existing roof edge — ${roofTrace.length} point${roofTrace.length === 1 ? "" : "s"} added`
+    : traceComplete
+      ? "Roofline traced — confirm when ready"
+      : getInstruction(wallCount, wallCombo, points.length, isUnderExisting);
 
   if (!permission) return <View style={styles.container} />;
   if (!permission.granted) {
@@ -453,21 +550,29 @@ export default function CameraScreen() {
       ),
     );
 
-    router.push({
-      pathname: "/configure",
-      params: {
-        photoUri,
-        box_x1: String(box_x1),
-        box_y1: String(box_y1),
-        box_x2: String(box_x2),
-        box_y2: String(box_y2),
-        wall_corners: JSON.stringify(normalizedCorners),
-        preset_wall_count: String(wallCount),
-        preset_wall_combo: wallCount === 1 ? "" : (wallCombo ?? ""),
-        preset_roof_style: isUnderExisting ? "under_existing" : "",
-        preset_existing_roof: isUnderExisting ? existingRoof : "",
-      },
-    });
+    const configureParams = {
+      photoUri,
+      box_x1: String(box_x1),
+      box_y1: String(box_y1),
+      box_x2: String(box_x2),
+      box_y2: String(box_y2),
+      wall_corners: JSON.stringify(normalizedCorners),
+      preset_wall_count: String(wallCount),
+      preset_wall_combo: wallCount === 1 ? "" : (wallCombo ?? ""),
+      preset_roof_style: isUnderExisting ? "under_existing" : "",
+      preset_existing_roof: isUnderExisting ? existingRoof : "",
+      // Carry the design's row forward so configure hydrates the EXISTING wall
+      // config (which must NOT reset just because points changed) and merges the
+      // new points into it.
+      draftId,
+    };
+    // Re-plotting an existing design: replace so we don't stack a second capture
+    // screen. A brand-new capture pushes as before.
+    if (draftId) {
+      router.replace({ pathname: "/configure", params: configureParams });
+    } else {
+      router.push({ pathname: "/configure", params: configureParams });
+    }
   };
 
   // ─── Camera mode ───────────────────────────────────────────────────────────
@@ -659,7 +764,7 @@ export default function CameraScreen() {
               setPoints((prev) => prev.slice(0, nearIndex));
               return;
             }
-            if (points.length >= totalPoints) return;
+            if (points.length >= maxPoints) return;
             setPoints((prev) => [...prev, { x: locationX, y: locationY }]);
           }}
         >
@@ -684,8 +789,10 @@ export default function CameraScreen() {
                   width: DOT_RADIUS * 2,
                   height: DOT_RADIUS * 2,
                   borderRadius: DOT_RADIUS,
-                  // Front corner point (index 4) gets green colour
-                  backgroundColor: i === 4 ? "#22cc44" : Colors.primary,
+                  // Front corner ground (4) green, its TOP (5) orange — the pair
+                  // the user has to keep vertically aligned.
+                  backgroundColor:
+                    i === 4 ? "#22cc44" : i === 5 ? "#ff9500" : Colors.primary,
                 },
               ]}
             >
@@ -695,45 +802,17 @@ export default function CameraScreen() {
         </View>
       </View>
 
-      <View style={styles.instructionBanner}>
-        <Text style={styles.instructionText}>
-          {inTracePhase
-            ? `Trace the existing roof edge — ${roofTrace.length} point${roofTrace.length === 1 ? "" : "s"} added`
-            : traceComplete
-              ? "Roofline traced — confirm when ready"
-              : getInstruction(wallCount, wallCombo, points.length)}
-        </Text>
-        {inTracePhase && (
-          <Text style={styles.instructionSub}>
-            {existingRoof === "gable"
-              ? "Now trace the underside of the existing roof: start at point 1 (top of the side wall), tap upward to the roof PEAK, then back down to point 2 (top of the front wall). Then tap “Done Tracing”."
-              : "Now trace the underside of the existing roof: tap along its slope from point 1 (top of the side wall) across to point 2 (top of the front wall), following the eave. Then tap “Done Tracing”."}
-          </Text>
-        )}
-        {isUnderExisting && !allPlaced && points.length === 0 && (
-          <Text style={styles.instructionSub}>
-            {`Under-Existing: two walls form an L — Wall ${wallLetters(wallCombo).side} runs back to the house, Wall ${wallLetters(wallCombo).front} runs parallel to the house. First place the 5 corner points, then you'll trace the existing roofline above them.`}
-          </Text>
-        )}
-        {!isUnderExisting && wallCount !== 1 && points.length === 0 && (
-          <Text style={styles.instructionSub}>
-            {`The two visible walls form an L: Wall ${wallLetters(wallCombo).side} is the SIDE wall running back to the house, Wall ${wallLetters(wallCombo).front} FACES you. Place points 1–4 at their top and bottom corners (top-left, top-right, bottom-right, bottom-left), then point 5 (green) on the ground at the nearest corner where the two walls meet.`}
-            {wallCount === 3
-              ? " (3-wall: you capture these two visible walls now; the 3rd wall is priced/added later in the configurator.)"
-              : ""}
-          </Text>
-        )}
-        {!isUnderExisting && wallCount === 1 && points.length === 0 && (
-          <Text style={styles.instructionSub}>
-            Trace the nook corners where the sunroom will attach
-          </Text>
-        )}
-        {points.length > 0 && !allPlaced && (
-          <Text style={styles.instructionSub}>
-            Tap an existing point to remove it and re-place from there
-          </Text>
-        )}
-      </View>
+      <InstructionBanner
+        mainLine={instructionMainLine}
+        inTracePhase={inTracePhase}
+        existingRoof={existingRoof}
+        isUnderExisting={isUnderExisting}
+        allPlaced={allPlaced}
+        pointsPlaced={points.length}
+        wallCount={wallCount}
+        wallCombo={wallCombo}
+        cornerTopOpen={allPlaced && points.length < maxPoints}
+      />
 
       <View style={styles.reviewFooter}>
         <Pressable
@@ -966,28 +1045,6 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
   },
   pointDotLabel: { color: "#fff", fontSize: FontSize.body, fontWeight: "700" },
-  instructionBanner: {
-    position: "absolute",
-    top: 24,
-    left: 16,
-    right: 16,
-    backgroundColor: "rgba(0,0,0,0.7)",
-    borderRadius: 10,
-    padding: 12,
-    alignItems: "center",
-    gap: 4,
-  },
-  instructionText: {
-    color: "#fff",
-    fontSize: FontSize.callout,
-    textAlign: "center",
-    fontWeight: "600",
-  },
-  instructionSub: {
-    color: "rgba(255,255,255,0.6)",
-    fontSize: FontSize.body,
-    textAlign: "center",
-  },
   reviewFooter: {
     position: "absolute",
     bottom: 0,

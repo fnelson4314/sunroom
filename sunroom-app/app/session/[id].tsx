@@ -1,3 +1,5 @@
+import Card from "@/components/ui/Card";
+import StatusBadge from "@/components/ui/StatusBadge";
 import { Colors } from "@/constants/Colors";
 import { FontSize } from "@/constants/Typography";
 import { getSession } from "@/services/api";
@@ -12,22 +14,6 @@ import {
   Text,
   View,
 } from "react-native";
-
-const STATUS_COLORS: Record<string, string> = {
-  complete: Colors.status.complete,
-  failed: Colors.status.failed,
-  generating: Colors.status.generating,
-  queued: Colors.status.generating,
-  draft: Colors.status.draft,
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  complete: "Complete",
-  failed: "Failed",
-  generating: "Generating",
-  queued: "Queued",
-  draft: "Draft",
-};
 
 export default function SessionDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -76,9 +62,6 @@ export default function SessionDetailScreen() {
 
   // ─── Helpers ──────────────────────────────────────────────
 
-  const statusColor = STATUS_COLORS[session.status] || Colors.text.tertiary;
-  const statusLabel = STATUS_LABELS[session.status] || session.status;
-
   const createdAt = new Date(session.created_at).toLocaleDateString("en-US", {
     year: "numeric",
     month: "long",
@@ -123,21 +106,12 @@ export default function SessionDetailScreen() {
 
         {/* Status badge */}
         <View style={styles.statusRow}>
-          <View
-            style={[
-              styles.statusBadge,
-              { backgroundColor: statusColor + "20" },
-            ]}
-          >
-            <Text style={[styles.statusText, { color: statusColor }]}>
-              {statusLabel}
-            </Text>
-          </View>
+          <StatusBadge status={session.status} />
           <Text style={styles.dateText}>{createdAt}</Text>
         </View>
 
         {/* Customer info */}
-        <View style={styles.card}>
+        <Card>
           <Text style={styles.cardLabel}>Customer</Text>
           <Text style={styles.cardTitle}>
             {session.customer_name || "Unnamed Customer"}
@@ -145,11 +119,11 @@ export default function SessionDetailScreen() {
           {session.customer_email && (
             <Text style={styles.cardSub}>{session.customer_email}</Text>
           )}
-        </View>
+        </Card>
 
         {/* Dimensions */}
         {(session.width_ft || session.depth_ft) && (
-          <View style={styles.card}>
+          <Card>
             <Text style={styles.cardLabel}>Dimensions</Text>
             <View style={styles.dimensionRow}>
               {session.width_ft && (
@@ -185,25 +159,38 @@ export default function SessionDetailScreen() {
                 </View>
               )}
             </View>
-          </View>
+          </Card>
+        )}
+
+        {/* Before photo — the original house photo, shown alongside the render
+            so the completed session keeps both before and after. */}
+        {session.render_url && session.house_photo_url && (
+          <Card>
+            <Text style={styles.cardLabel}>Before</Text>
+            <Image
+              source={{ uri: session.house_photo_url }}
+              style={styles.beforeImage}
+              resizeMode="cover"
+            />
+          </Card>
         )}
 
         {/* Price */}
         {session.total_price && (
-          <View style={styles.priceCard}>
+          <Card style={styles.priceCard}>
             <Text style={styles.priceLabel}>Estimated Total</Text>
             <Text style={styles.priceValue}>
               ${Number(session.total_price).toLocaleString()}
             </Text>
-          </View>
+          </Card>
         )}
 
         {/* Notes */}
         {session.notes && (
-          <View style={styles.card}>
+          <Card>
             <Text style={styles.cardLabel}>Notes</Text>
             <Text style={styles.notesText}>{session.notes}</Text>
-          </View>
+          </Card>
         )}
 
         {/* Session ID for reference */}
@@ -238,6 +225,31 @@ export default function SessionDetailScreen() {
         {session.status === "failed" && (
           <Pressable style={styles.retryButton} onPress={() => router.back()}>
             <Text style={styles.retryButtonText}>Go Back to Reconfigure</Text>
+          </Pressable>
+        )}
+
+        {/* Reopen the full configuration in the wizard. The session row carries
+            the whole draft_state (config + before-photo/box), so hydrateFromDraft
+            restores every selection. Pass the persistent house_photo_url so the
+            photo survives even if the original local file is gone. */}
+        {session.draft_state && (
+          <Pressable
+            style={styles.retryButton}
+            onPress={() =>
+              router.push({
+                pathname: "/configure",
+                params: {
+                  draftId: session.id,
+                  photoUri: session.house_photo_url ?? "",
+                  box_x1: "0",
+                  box_y1: "0",
+                  box_x2: "1",
+                  box_y2: "1",
+                },
+              })
+            }
+          >
+            <Text style={styles.retryButtonText}>✎ Edit Configuration</Text>
           </Pressable>
         )}
 
@@ -306,6 +318,12 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     marginBottom: 4,
   },
+  beforeImage: {
+    width: "100%",
+    height: 180,
+    borderRadius: 10,
+    marginTop: 6,
+  },
   photoContainer: {
     position: "relative",
     marginBottom: 4,
@@ -347,26 +365,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 4,
   },
-  statusBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 20,
-  },
-  statusText: {
-    fontSize: FontSize.body,
-    fontWeight: "600",
-  },
   dateText: {
     fontSize: FontSize.body,
     color: Colors.text.tertiary,
-  },
-  card: {
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 0.5,
-    borderColor: Colors.border,
-    gap: 4,
   },
   cardLabel: {
     fontSize: FontSize.small,
@@ -409,11 +410,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   priceCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 0.5,
-    borderColor: Colors.border,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",

@@ -1,15 +1,17 @@
-import LineItemRow from "@/components/configure/LineItemRow";
 import SaveDraftModal from "@/components/configure/SaveDraftModal";
-import ScreenRoomBuilder from "@/components/configure/ScreenRoomBuilder";
 import StepIndicator from "@/components/configure/StepIndicator";
-import WallBuilder, {
-  FEATURE_OPTION_KEYWORDS,
-  PANEL_TYPES,
-} from "@/components/configure/WallBuilder";
+import Step1Setup from "@/components/configure/steps/Step1Setup";
+import Step5Walls from "@/components/configure/steps/Step5Walls";
+import Step6Roof from "@/components/configure/steps/Step6Roof";
+import Step9Summary from "@/components/configure/steps/Step9Summary";
+import StepLineItems from "@/components/configure/steps/StepLineItems";
 import { Colors } from "@/constants/Colors";
 import { FontSize } from "@/constants/Typography";
+import FlowNav from "@/components/FlowNav";
+import { renderKey, useDesignSession } from "@/contexts/DesignSession";
 import type { Option } from "@/hooks/useConfigureState";
-import { inToCeilFt, useConfigureState } from "@/hooks/useConfigureState";
+import { confirmLeave } from "@/utils/confirm";
+import { useConfigureState } from "@/hooks/useConfigureState";
 import {
   getFullCatalog,
   loadDraft,
@@ -26,18 +28,9 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
-
-const STEP_CATEGORIES: Record<number, string> = {
-  2: "demo",
-  3: "concrete",
-  4: "deck",
-  7: "electrical",
-  8: "miscellaneous",
-};
 
 // Human-readable label for each absolute step number.
 // configure.tsx maps visible steps → labels and passes them to StepIndicator.
@@ -77,6 +70,8 @@ export default function ConfigureScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const configure = useConfigureState();
   const navigation = useNavigation();
+  const { lastRender, reachStep, setDraftId: setSessionDraftId } =
+    useDesignSession();
 
   // Persists the active wall tab across step navigation so returning to step 5
   // always lands on the last wall the user was editing.
@@ -112,17 +107,26 @@ export default function ConfigureScreen() {
 
   useLayoutEffect(() => {
     navigation.setOptions({
+      headerTitle: () => (
+        <FlowNav current={1} onBeforeNavigate={autoSaveDraft} />
+      ),
       headerLeft: () =>
         currentStep === 1 ? (
           <TouchableOpacity
             onPress={confirmDiscardAndBack}
-            style={{ paddingHorizontal: 8, paddingVertical: 6 }}
+            hitSlop={12}
+            style={styles.headerBack}
           >
-            <Text style={{ fontSize: FontSize.subhead, color: Colors.primary }}>‹ Back</Text>
+            <Text style={styles.headerBackIcon}>‹</Text>
           </TouchableOpacity>
         ) : undefined,
     });
   }, [navigation, currentStep]);
+
+  // Mark the configurator reached so the back-nav menu enables it.
+  useEffect(() => {
+    reachStep(1);
+  }, []);
 
   // Draft state
   const [showSaveModal, setShowSaveModal] = useState(false);
@@ -136,7 +140,15 @@ export default function ConfigureScreen() {
     box_x2: params.box_x2 ?? "1",
     box_y2: params.box_y2 ?? "1",
   });
-  const [wallCorners] = useState<string>(params.wall_corners ?? "");
+  const [wallCorners, setWallCorners] = useState<string>(
+    params.wall_corners ?? "",
+  );
+
+  // Keep the shared session's draftId in sync so the back-nav menu can route to
+  // any screen with the right row.
+  useEffect(() => {
+    if (draftId) setSessionDraftId(draftId);
+  }, [draftId]);
 
   // ─── Visible step logic ────────────────────────────────────────────────────
   // Step 5 (wall config) is skipped for roof_only (no walls to configure).
@@ -212,7 +224,10 @@ export default function ConfigureScreen() {
           const meta = draft.draft_state._meta as
             | Record<string, string>
             | undefined;
-          if (meta?.photoUri) setPhotoUri(meta.photoUri);
+          // Prefer a photoUri passed in params (the persistent Supabase
+          // house_photo_url when reopening a completed session) over the draft's
+          // stored _meta.photoUri, which is a local file URI that may be stale.
+          if (meta?.photoUri && !params.photoUri) setPhotoUri(meta.photoUri);
           if (meta?.box_x1)
             setBoxCoords({
               box_x1: meta.box_x1,
@@ -220,6 +235,10 @@ export default function ConfigureScreen() {
               box_x2: meta.box_x2,
               box_y2: meta.box_y2,
             });
+          // Restore the plotted points (used for generation) unless fresh ones
+          // came in as params (e.g. the user just re-plotted on the camera).
+          if (meta?.wall_corners && !params.wall_corners)
+            setWallCorners(meta.wall_corners);
           configure.hydrateFromDraft(draft.draft_state);
           setSessionName(draft.session_name ?? "");
           setDraftId(draft.id);
@@ -233,13 +252,61 @@ export default function ConfigureScreen() {
 
   // ─── Draft save handler ────────────────────────────────────────────────────
 
+  // Everything the CAMERA screen owns, persisted alongside the config so
+  // reopening restores the photo, the box, the plotted points and the capture
+  // presets — and so re-plotting points can update the draft without disturbing
+  // the wall config (which lives in draft_state, not here).
+  const buildMeta = () => ({
+    photoUri,
+    ...boxCoords,
+    wall_corners: wallCorners,
+    preset_wall_count: String(configure.state.numberOfWalls ?? ""),
+    preset_wall_combo: configure.state.wallCombo ?? "",
+    preset_roof_style:
+      configure.state.roofStyle === "under_existing" ? "under_existing" : "",
+    preset_existing_roof: configure.state.underExistingShape ?? "",
+  });
+
+  // Silently persists the current configuration to the draft row, inferring a
+  // name the same way Generate's auto-save does. Used before generating and
+  // before jumping away via the flow-nav menu, so in-progress edits (line
+  // items, customer info, wall config) are never silently lost just because
+  // the user hopped to Design/Quote instead of pressing Generate/Save.
+  const autoSaveDraft = async (): Promise<string | null> => {
+    let activeDraftId = draftId;
+    try {
+      const state = configure.serializeForDraft();
+      const draftState = { ...state, _meta: buildMeta() };
+      const name = configure.state.customerName
+        ? `${configure.state.customerName} — Draft`
+        : sessionName || "Untitled Configuration";
+      if (activeDraftId) {
+        await updateDraft(activeDraftId, {
+          session_name: name,
+          draft_state: draftState,
+        });
+      } else {
+        const result = await saveDraft({
+          session_name: name,
+          salesperson_id: "dev-salesperson-1",
+          draft_state: draftState,
+        });
+        activeDraftId = result.id;
+        setDraftId(activeDraftId);
+      }
+    } catch (e) {
+      console.warn("Auto-save failed:", e);
+    }
+    return activeDraftId;
+  };
+
   const handleSaveDraft = async (name: string) => {
     setIsSavingDraft(true);
     try {
       const state = configure.serializeForDraft();
       const draftState = {
         ...state,
-        _meta: { photoUri, ...boxCoords },
+        _meta: buildMeta(),
       };
 
       if (draftId) {
@@ -293,30 +360,7 @@ export default function ConfigureScreen() {
   const handleGenerate = async () => {
     if (!configure.canGenerate()) return;
 
-    let activeDraftId = draftId;
-    try {
-      const state = configure.serializeForDraft();
-      const draftState = { ...state, _meta: { photoUri, ...boxCoords } };
-      const name = configure.state.customerName
-        ? `${configure.state.customerName} — Draft`
-        : sessionName || "Untitled Configuration";
-      if (activeDraftId) {
-        await updateDraft(activeDraftId, {
-          session_name: name,
-          draft_state: draftState,
-        });
-      } else {
-        const result = await saveDraft({
-          session_name: name,
-          salesperson_id: "dev-salesperson-1",
-          draft_state: draftState,
-        });
-        activeDraftId = result.id;
-        setDraftId(activeDraftId);
-      }
-    } catch (e) {
-      console.warn("Auto-save before generate failed:", e);
-    }
+    const activeDraftId = await autoSaveDraft();
 
     const total = configure.calculateTotal(allOptions);
     const breakdown = configure.buildPriceBreakdown(allOptions);
@@ -329,16 +373,56 @@ export default function ConfigureScreen() {
       boxCoords.box_y2,
     );
 
-    router.push({
-      pathname: "/generate",
-      params: {
-        ...generateParams,
-        totalPrice: String(Math.round(total)),
-        priceBreakdown: JSON.stringify(breakdown),
-        draftId: activeDraftId ?? "",
-        wall_corners: wallCorners,
-      },
-    });
+    // If the render-affecting inputs are unchanged since the last generation,
+    // reuse that render instead of burning another generation — jump straight to
+    // the editor. Changing only the customer name/email/notes or pricing line
+    // items leaves this key identical, so those edits never re-render.
+    const key = renderKey({ ...generateParams, wall_corners: wallCorners });
+    if (lastRender && lastRender.key === key && lastRender.renderUrls.length > 0) {
+      router.replace({
+        pathname: "/editor",
+        params: {
+          sessionId: lastRender.sessionId,
+          renderUrl: lastRender.renderUrls[0],
+          renderUrls: JSON.stringify(lastRender.renderUrls),
+          photoUri,
+          draftId: activeDraftId ?? "",
+          box_x1: boxCoords.box_x1,
+          box_y1: boxCoords.box_y1,
+          box_x2: boxCoords.box_x2,
+          box_y2: boxCoords.box_y2,
+          totalPrice: String(Math.round(total)),
+          priceBreakdown: JSON.stringify(breakdown),
+        },
+      });
+      return;
+    }
+
+    const goGenerate = () =>
+      router.push({
+        pathname: "/generate",
+        params: {
+          ...generateParams,
+          totalPrice: String(Math.round(total)),
+          priceBreakdown: JSON.stringify(breakdown),
+          draftId: activeDraftId ?? "",
+          wall_corners: wallCorners,
+          renderKey: key,
+        },
+      });
+
+    // If there's already a render and the visual inputs changed, warn that this
+    // replaces it and uses AI credits (points re-plotted / walls/roof changed).
+    // First-ever generation just proceeds.
+    if (lastRender && lastRender.renderUrls.length > 0) {
+      confirmLeave(
+        "Your changes need a new design render, which uses AI credits and replaces the current one. Regenerate now?",
+        goGenerate,
+        { title: "Regenerate design?", confirmText: "Regenerate" },
+      );
+      return;
+    }
+    goGenerate();
   };
 
   // ─── Loading / error ──────────────────────────────────────────────────────
@@ -361,849 +445,39 @@ export default function ConfigureScreen() {
   }
 
   // ─── Step content ─────────────────────────────────────────────────────────
+  // Each step is its own component under components/configure/steps/ — this
+  // screen keeps owning currentStep/allOptions/productLines/the scroll+footer
+  // chrome and just dispatches to the matching step's UI.
 
   const renderStep = () => {
     switch (currentStep) {
-      case 1: {
-        const roofStyle = configure.state.roofStyle;
-        const showMountHeight =
-          roofStyle === "gable" ||
-          roofStyle === "studio" ||
-          (roofStyle === "roof_only" &&
-            configure.state.roofOnlySubStyle !== null);
-        const isRoofOnly = roofStyle === "roof_only";
-
-        return (
-          <View style={styles.stepContent}>
-            <Text style={styles.stepTitle}>Project Setup</Text>
-
-            <Text style={styles.fieldLabel}>Product Line</Text>
-            <Text style={styles.fieldHint}>
-              Determines the wall system for this project
-            </Text>
-            <View style={styles.optionGrid}>
-              {productLines.map((pl) => {
-                const isSelected =
-                  configure.state.selectedProductLine?.id === pl.id;
-                return (
-                  <Pressable
-                    key={pl.id}
-                    style={[
-                      styles.optionCard,
-                      isSelected && styles.optionCardSelected,
-                    ]}
-                    onPress={() =>
-                      configure.setProductLine({
-                        id: pl.id,
-                        product_name: pl.product_name,
-                        description: pl.description,
-                        wall_system: pl.wall_system,
-                      })
-                    }
-                  >
-                    <Text
-                      style={[
-                        styles.optionName,
-                        isSelected && styles.optionNameSelected,
-                      ]}
-                    >
-                      {pl.product_name}
-                    </Text>
-                    {pl.description && (
-                      <Text style={styles.optionDesc}>{pl.description}</Text>
-                    )}
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            <Text style={styles.fieldLabel}>Roof Style</Text>
-            <View style={styles.optionGrid}>
-              {(
-                [
-                  { value: "studio", label: "Studio / Single" },
-                  { value: "gable", label: "Gable" },
-                  { value: "under_existing", label: "Under Existing" },
-                  { value: "roof_only", label: "Roof Only" },
-                ] as const
-              ).map((roof) => (
-                <Pressable
-                  key={roof.value}
-                  style={[
-                    styles.optionCard,
-                    configure.state.roofStyle === roof.value &&
-                      styles.optionCardSelected,
-                  ]}
-                  onPress={() => configure.setRoofStyle(roof.value)}
-                >
-                  <Text
-                    style={[
-                      styles.optionName,
-                      configure.state.roofStyle === roof.value &&
-                        styles.optionNameSelected,
-                    ]}
-                  >
-                    {roof.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-
-            {/* Roof-only sub-style: gable or studio/single */}
-            {isRoofOnly && (
-              <View style={styles.fieldBlock}>
-                <Text style={styles.fieldLabel}>Roof Shape</Text>
-                <Text style={styles.fieldHint}>
-                  Choose the shape of the roof being installed
-                </Text>
-                <View style={styles.optionGrid}>
-                  {(
-                    [
-                      { value: "studio", label: "Studio / Single" },
-                      { value: "gable", label: "Gable" },
-                    ] as const
-                  ).map((sub) => (
-                    <Pressable
-                      key={sub.value}
-                      style={[
-                        styles.optionCard,
-                        configure.state.roofOnlySubStyle === sub.value &&
-                          styles.optionCardSelected,
-                      ]}
-                      onPress={() => configure.setRoofOnlySubStyle(sub.value)}
-                    >
-                      <Text
-                        style={[
-                          styles.optionName,
-                          configure.state.roofOnlySubStyle === sub.value &&
-                            styles.optionNameSelected,
-                        ]}
-                      >
-                        {sub.label}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-
-                {/* Roof dimensions — inputs in inches, priced as ceil-ft, no overhang */}
-                <Text style={styles.fieldLabel}>Roof Dimensions</Text>
-                <Text style={styles.fieldHint}>
-                  Enter in inches — converted to ceiling feet for pricing, no
-                  overhang added
-                </Text>
-                <View style={styles.roofDimsRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.roofDimLabel}>Width (in)</Text>
-                    <TextInput
-                      style={styles.textInput}
-                      value={configure.state.roofOnlyWidthIn}
-                      onChangeText={configure.setRoofOnlyWidthIn}
-                      placeholder="e.g. 240"
-                      placeholderTextColor={Colors.text.tertiary}
-                      keyboardType="decimal-pad"
-                    />
-                    {!!configure.state.roofOnlyWidthIn && (
-                      <Text style={styles.roofDimConvert}>
-                        = {inToCeilFt(configure.state.roofOnlyWidthIn)} ft
-                      </Text>
-                    )}
-                  </View>
-                  <Text style={styles.roofDimSep}>×</Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.roofDimLabel}>Depth (in)</Text>
-                    <TextInput
-                      style={styles.textInput}
-                      value={configure.state.roofOnlyDepthIn}
-                      onChangeText={configure.setRoofOnlyDepthIn}
-                      placeholder="e.g. 144"
-                      placeholderTextColor={Colors.text.tertiary}
-                      keyboardType="decimal-pad"
-                    />
-                    {!!configure.state.roofOnlyDepthIn && (
-                      <Text style={styles.roofDimConvert}>
-                        = {inToCeilFt(configure.state.roofOnlyDepthIn)} ft
-                      </Text>
-                    )}
-                  </View>
-                  {configure.state.roofOnlyWidthIn &&
-                    configure.state.roofOnlyDepthIn && (
-                      <View style={styles.roofDimResult}>
-                        <Text style={styles.roofDimResultText}>
-                          {inToCeilFt(configure.state.roofOnlyWidthIn) *
-                            inToCeilFt(configure.state.roofOnlyDepthIn)}{" "}
-                          sq ft
-                        </Text>
-                      </View>
-                    )}
-                </View>
-
-                {/* Wall height + mount height side by side */}
-                <View style={[styles.roofDimsRow, { marginTop: 4 }]}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.roofDimLabel}>Wall Height (in)</Text>
-                    <TextInput
-                      style={styles.textInput}
-                      value={configure.state.roofOnlyWallHeightIn}
-                      onChangeText={configure.setRoofOnlyWallHeightIn}
-                      placeholder="e.g. 96"
-                      placeholderTextColor={Colors.text.tertiary}
-                      keyboardType="decimal-pad"
-                    />
-                    {!!configure.state.roofOnlyWallHeightIn && (
-                      <Text style={styles.roofDimConvert}>
-                        = {inToCeilFt(configure.state.roofOnlyWallHeightIn)} ft
-                      </Text>
-                    )}
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.roofDimLabel}>Mount Height (in)</Text>
-                    <TextInput
-                      style={styles.textInput}
-                      value={configure.state.mountHeight}
-                      onChangeText={configure.setMountHeight}
-                      placeholder="e.g. 132"
-                      placeholderTextColor={Colors.text.tertiary}
-                      keyboardType="decimal-pad"
-                    />
-                    {!!configure.state.mountHeight && (
-                      <Text style={styles.roofDimConvert}>
-                        = {inToCeilFt(configure.state.mountHeight)} ft
-                      </Text>
-                    )}
-                  </View>
-                </View>
-              </View>
-            )}
-
-            {/* Mount height — gable and studio only (roof_only has its own inline input above) */}
-            {showMountHeight && configure.state.roofStyle !== "roof_only" && (
-              <View style={styles.fieldBlock}>
-                <Text style={styles.fieldLabel}>Mount Height (ft)</Text>
-                <Text style={styles.fieldHint}>
-                  {roofStyle === "gable" ||
-                  configure.state.roofOnlySubStyle === "gable"
-                    ? "Total height from ground to the peak of the gable"
-                    : "Total height from ground to the top edge of the wing glass"}
-                </Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={configure.state.mountHeight}
-                  onChangeText={configure.setMountHeight}
-                  placeholder="e.g. 11"
-                  placeholderTextColor={Colors.text.tertiary}
-                  keyboardType="decimal-pad"
-                />
-              </View>
-            )}
-
-            {/* Number of walls — hidden for roof_only */}
-            {!isRoofOnly && (
-              <View>
-                <Text style={styles.fieldLabel}>Number of Walls</Text>
-                <View style={styles.wallCountRow}>
-                  {([1, 2, 3] as const).map((n) => (
-                    <Pressable
-                      key={n}
-                      style={[
-                        styles.wallCountCard,
-                        configure.state.numberOfWalls === n &&
-                          styles.wallCountCardSelected,
-                      ]}
-                      onPress={() => configure.setNumberOfWalls(n)}
-                    >
-                      <Text
-                        style={[
-                          styles.wallCountNumber,
-                          configure.state.numberOfWalls === n &&
-                            styles.wallCountNumberSelected,
-                        ]}
-                      >
-                        {n}
-                      </Text>
-                      <Text style={styles.wallCountLabel}>
-                        {n === 1 ? "wall" : "walls"}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-
-                {(configure.state.numberOfWalls === 2 ||
-                  configure.state.numberOfWalls === 3) && (
-                  <View style={[styles.fieldBlock, { marginTop: 12 }]}>
-                    <Text style={styles.fieldLabel}>Walls to Render</Text>
-                    <Text style={styles.fieldHint}>
-                      {configure.state.numberOfWalls === 3
-                        ? "All 3 walls are priced; choose which 2 the camera sees"
-                        : "Which two walls of the sunroom"}
-                    </Text>
-                    <View style={styles.optionGrid}>
-                      {(["AB", "BC"] as const).map((combo) => (
-                        <Pressable
-                          key={combo}
-                          style={[
-                            styles.optionCard,
-                            configure.state.wallCombo === combo &&
-                              styles.optionCardSelected,
-                          ]}
-                          onPress={() => configure.setWallCombo(combo)}
-                        >
-                          <Text
-                            style={[
-                              styles.optionName,
-                              configure.state.wallCombo === combo &&
-                                styles.optionNameSelected,
-                            ]}
-                          >
-                            {combo === "AB" ? "A + B" : "B + C"}
-                          </Text>
-                          <Text style={styles.optionDesc}>
-                            {combo === "AB"
-                              ? "Left side + Front"
-                              : "Front + Right side"}
-                          </Text>
-                        </Pressable>
-                      ))}
-                    </View>
-                  </View>
-                )}
-              </View>
-            )}
-          </View>
-        );
-      }
+      case 1:
+        return <Step1Setup configure={configure} productLines={productLines} />;
 
       case 2:
       case 3:
       case 4:
       case 7:
-      case 8: {
-        const category = STEP_CATEGORIES[currentStep];
-        const categoryOptions =
-          currentStep === 4
-            ? allOptions.filter(
-                (o) => o.category === "deck" || o.category === "deck_options",
-              )
-            : allOptions.filter((o) => o.category === category);
-
-        const stepTotal = categoryOptions
-          .filter((o) => configure.isLineItemChecked(o.id))
-          .reduce((sum, o) => {
-            const qty = parseFloat(configure.getLineItemQuantity(o.id)) || 0;
-            return sum + o.unit_price * qty;
-          }, 0);
-
-        const stepTitles: Record<number, string> = {
-          2: "Demolition",
-          3: "Concrete",
-          4: "Deck & Deck Options",
-          7: "Electrical / HVAC",
-          8: "Miscellaneous",
-        };
-
+      case 8:
         return (
-          <View style={styles.stepContent}>
-            <View style={styles.stepTitleRow}>
-              <Text style={styles.stepTitle}>{stepTitles[currentStep]}</Text>
-              {stepTotal > 0 && (
-                <Text style={styles.stepSubtotal}>
-                  ${stepTotal.toLocaleString()}
-                </Text>
-              )}
-            </View>
-            <Text style={styles.fieldHint}>
-              Check all items that apply and enter quantities
-            </Text>
-            {categoryOptions.map((option) => (
-              <LineItemRow
-                key={option.id}
-                name={option.name}
-                unitPrice={option.unit_price}
-                unitType={option.unit_type}
-                isChecked={configure.isLineItemChecked(option.id)}
-                quantity={configure.getLineItemQuantity(option.id)}
-                onToggle={() => configure.toggleLineItem(option.id)}
-                onQuantityChange={(val) =>
-                  configure.setLineItemQuantity(option.id, val)
-                }
-              />
-            ))}
-          </View>
+          <StepLineItems step={currentStep} configure={configure} allOptions={allOptions} />
         );
-      }
 
-      case 5: {
-        // Step 5 is hidden for roof_only. Branches on wall_system:
-        // 2_inch → ScreenRoomBuilder, everything else → WallBuilder.
-        const isScreenRoom =
-          configure.state.selectedProductLine?.wall_system === "2_inch";
-
-        const handrailOption =
-          allOptions.find((o) =>
-            o.name.toLowerCase().includes("screen room aluminum handrails"),
-          ) ?? null;
-        const extraDoorOption =
-          allOptions.find((o) =>
-            o.name.toLowerCase().includes("additional screen door"),
-          ) ?? null;
-
+      case 5:
         return (
-          <View style={styles.stepContent}>
-            <Text style={styles.stepTitle}>
-              {isScreenRoom
-                ? "Screen Room Configuration"
-                : "Wall Configuration"}
-            </Text>
-
-            {/* Under-existing: include a new gable/wing infill, or walls only
-                (keep the existing gable). Hidden for screen rooms. */}
-            {configure.state.roofStyle === "under_existing" &&
-              !isScreenRoom && (
-                <View style={styles.fieldBlock}>
-                  <Text style={styles.fieldLabel}>Gable / Wing Area</Text>
-                  <Text style={styles.fieldHint}>
-                    Is there an existing gable/wing above to keep, or should new
-                    gable/wing panes be added up to the roof?
-                  </Text>
-                  <View style={styles.optionGrid}>
-                    {(
-                      [
-                        {
-                          value: true,
-                          label: "Add Gable / Wings",
-                          desc: "New glass or solid infill up to the roof",
-                        },
-                        {
-                          value: false,
-                          label: "Walls Only",
-                          desc: "Keep the existing gable above the walls",
-                        },
-                      ] as const
-                    ).map((opt) => (
-                      <Pressable
-                        key={String(opt.value)}
-                        style={[
-                          styles.optionCard,
-                          configure.state.includeGableWings === opt.value &&
-                            styles.optionCardSelected,
-                        ]}
-                        onPress={() =>
-                          configure.setIncludeGableWings(opt.value, allOptions)
-                        }
-                      >
-                        <Text
-                          style={[
-                            styles.optionName,
-                            configure.state.includeGableWings === opt.value &&
-                              styles.optionNameSelected,
-                          ]}
-                        >
-                          {opt.label}
-                        </Text>
-                        <Text style={styles.optionDesc}>{opt.desc}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </View>
-              )}
-
-            {isScreenRoom ? (
-              <ScreenRoomBuilder
-                screenRoom={configure.state.screenRoom}
-                roofStyle={configure.state.roofStyle}
-                mountHeight={configure.state.mountHeight}
-                allOptions={allOptions}
-                selectedWallType={configure.state.wallType}
-                activeWallId={activeWallId}
-                onActiveWallChange={setActiveWallId}
-                onWallTypeSelect={configure.setWallType}
-                onWallDimensionChange={configure.setScreenWallDimension}
-                onUnitWidthChange={configure.setScreenUnitWidth}
-                onUnitTypeChange={configure.setScreenUnitType}
-                onKneewallChange={configure.setScreenKneewall}
-                onKneewallSolidStyle={configure.setScreenKneewallSolidStyle}
-                onChairrailChange={configure.setScreenChairrail}
-                onHandrailChange={configure.setScreenHandrail}
-                onTransomChange={configure.setScreenTransom}
-                onTransomHeightChange={configure.setScreenTransomHeight}
-                onGableGlassChange={configure.setScreenGableGlass}
-                wallColor={configure.state.wallColor}
-                onWallColorChange={configure.setWallColor}
-                handrailOption={handrailOption}
-                extraDoorOption={extraDoorOption}
-              />
-            ) : (
-              <WallBuilder
-                // Under-existing reuses the gable/wing glass config of the
-                // existing roof's shape (gable → wall B gable glass; studio →
-                // A/C wing glass), so the user can pick glass/solid and see it.
-                roofStyle={
-                  configure.state.roofStyle === "under_existing"
-                    ? // Walls-only keeps the existing gable, so suppress the
-                      // gable/wing glass UI by passing a shape WallBuilder ignores.
-                      configure.state.includeGableWings
-                      ? (configure.state.underExistingShape ?? "gable")
-                      : "under_existing"
-                    : configure.state.roofStyle
-                }
-                mountHeight={configure.state.mountHeight}
-                walls={configure.state.walls}
-                wallSystem={
-                  configure.state.selectedProductLine?.wall_system ?? null
-                }
-                allOptions={allOptions}
-                selectedWallType={configure.state.wallType}
-                wallAddOns={configure.state.wallAddOns}
-                defaultTransomHeightIn={configure.state.defaultTransomHeightIn}
-                defaultKneewallHeightIn={
-                  configure.state.defaultKneewallHeightIn
-                }
-                activeWallId={activeWallId}
-                onActiveWallChange={setActiveWallId}
-                onWallTypeSelect={configure.setWallType}
-                onDimensionChange={configure.setWallDimension}
-                onDefaultTransomHeightChange={configure.setDefaultTransomHeight}
-                onDefaultKneewallHeightChange={
-                  configure.setDefaultKneewallHeight
-                }
-                onUnitTransomHeightChange={configure.setUnitTransomHeight}
-                onUnitKneewallHeightChange={configure.setUnitKneewallHeight}
-                onWallUnitsChange={configure.setWallUnits}
-                onWallPanelTypeChange={(wallId, unitIndex, panelTypeId) =>
-                  configure.setWallPanelType(
-                    wallId,
-                    unitIndex,
-                    panelTypeId,
-                    allOptions,
-                    FEATURE_OPTION_KEYWORDS,
-                    PANEL_TYPES,
-                  )
-                }
-                onUnitMaterialChange={(wallId, unitIndex, feature, material) =>
-                  configure.setUnitMaterial(
-                    wallId,
-                    unitIndex,
-                    feature,
-                    material,
-                    allOptions,
-                  )
-                }
-                onUnitDoorStyleChange={(wallId, unitIndex, style) =>
-                  configure.setUnitDoorStyle(
-                    wallId,
-                    unitIndex,
-                    style,
-                    allOptions,
-                  )
-                }
-                onSplitTransomChange={configure.setSplitTransom}
-                onSplitKneewallChange={configure.setSplitKneewall}
-                onGableGlassChange={(wallId, config) =>
-                  configure.setGableGlass(wallId, config, allOptions)
-                }
-                onWallAddOnToggle={configure.toggleWallAddOn}
-                onWallAddOnQuantityChange={configure.setWallAddOnQuantity}
-                wallColor={configure.state.wallColor}
-                onWallColorChange={configure.setWallColor}
-                onSolidMaterialChange={configure.setSolidPanelMaterial}
-                onWallUnitWidthChange={configure.setWallUnitWidth}
-              />
-            )}
-          </View>
-        );
-      }
-
-      case 6: {
-        // Step 6 is hidden for under_existing (getVisibleSteps filters it out).
-        const baseRoofTypes = allOptions.filter((o) => {
-          if (o.category !== "roof_type" || o.sort_order > 8) return false;
-          const roofStyle = configure.state.roofStyle;
-          if (!roofStyle || roofStyle === "under_existing") return true;
-          if (roofStyle === "roof_only") {
-            // Filter by the chosen sub-style (gable or studio)
-            const sub = configure.state.roofOnlySubStyle;
-            if (!sub) return true; // none picked yet — show all
-            return o.name.toLowerCase().includes(sub);
-          }
-          return o.name.toLowerCase().includes(roofStyle);
-        });
-        const roofAddOnOptions = allOptions.filter(
-          (o) => o.category === "roof_type" && o.sort_order > 8,
+          <Step5Walls
+            configure={configure}
+            allOptions={allOptions}
+            activeWallId={activeWallId}
+            onActiveWallChange={setActiveWallId}
+          />
         );
 
-        const getRoofCost = () => {
-          if (!configure.state.roofType) return 0;
-          if (configure.state.roofStyle === "roof_only") {
-            const w = inToCeilFt(configure.state.roofOnlyWidthIn);
-            const d = inToCeilFt(configure.state.roofOnlyDepthIn);
-            return configure.state.roofType.unit_price * w * d;
-          }
-          const bWall = configure.state.walls.find((w) => w.id === "B");
-          const width = inToCeilFt(bWall?.widthIn || "");
-          let depth = 0;
-          if (configure.state.numberOfWalls === 1) {
-            depth = inToCeilFt(configure.state.projectionDistance);
-          } else {
-            const sideWall = configure.state.walls.find(
-              (w) => w.id === "A" || w.id === "C",
-            );
-            depth = inToCeilFt(sideWall?.widthIn || "");
-          }
-          return (
-            configure.state.roofType.unit_price * (width + 2) * (depth + 1)
-          );
-        };
+      case 6:
+        return <Step6Roof configure={configure} allOptions={allOptions} />;
 
-        const roofTotal = getRoofCost();
-
-        return (
-          <View style={styles.stepContent}>
-            <View style={styles.stepTitleRow}>
-              <Text style={styles.stepTitle}>Roof Configuration</Text>
-              {roofTotal > 0 && (
-                <Text style={styles.stepSubtotal}>
-                  ${roofTotal.toLocaleString()}
-                </Text>
-              )}
-            </View>
-
-            <Text style={styles.fieldLabel}>Roof Type</Text>
-            <View style={styles.optionGrid}>
-              {baseRoofTypes.map((option) => (
-                <Pressable
-                  key={option.id}
-                  style={[
-                    styles.optionCard,
-                    configure.state.roofType?.id === option.id &&
-                      styles.optionCardSelected,
-                  ]}
-                  onPress={() => configure.setRoofType(option)}
-                >
-                  <Text
-                    style={[
-                      styles.optionName,
-                      configure.state.roofType?.id === option.id &&
-                        styles.optionNameSelected,
-                    ]}
-                  >
-                    {option.name}
-                  </Text>
-                  <Text style={styles.optionDesc}>
-                    ${option.unit_price}/sq ft
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <Text style={styles.fieldLabel}>Roof Add-Ons</Text>
-            {roofAddOnOptions.map((option) => (
-              <LineItemRow
-                key={option.id}
-                name={option.name}
-                unitPrice={option.unit_price}
-                unitType={option.unit_type}
-                isChecked={configure.state.roofAddOns[option.id] !== undefined}
-                quantity={configure.state.roofAddOns[option.id] || ""}
-                onToggle={() => configure.toggleRoofAddOn(option.id)}
-                onQuantityChange={(val) =>
-                  configure.setRoofAddOnQuantity(option.id, val)
-                }
-              />
-            ))}
-          </View>
-        );
-      }
-
-      case 9: {
-        const grandTotal = configure.calculateTotal(allOptions);
-        const checkedLineItems = allOptions.filter(
-          (o) => configure.state.lineItems[o.id] !== undefined,
-        );
-        const checkedRoofAddOns = allOptions.filter(
-          (o) => configure.state.roofAddOns[o.id] !== undefined,
-        );
-
-        return (
-          <View style={styles.stepContent}>
-            <Text style={styles.stepTitle}>Customer & Summary</Text>
-
-            <Text style={styles.fieldLabel}>Customer Name</Text>
-            <TextInput
-              style={styles.textInput}
-              value={configure.state.customerName}
-              onChangeText={configure.setCustomerName}
-              placeholder="Full name"
-              placeholderTextColor={Colors.text.tertiary}
-              autoCapitalize="words"
-            />
-
-            <Text style={styles.fieldLabel}>Email</Text>
-            <TextInput
-              style={styles.textInput}
-              value={configure.state.customerEmail}
-              onChangeText={configure.setCustomerEmail}
-              placeholder="email@example.com"
-              placeholderTextColor={Colors.text.tertiary}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-
-            <Text style={styles.fieldLabel}>Notes</Text>
-            <TextInput
-              style={[styles.textInput, styles.notesInput]}
-              value={configure.state.notes}
-              onChangeText={configure.setNotes}
-              placeholder="Any special requirements..."
-              placeholderTextColor={Colors.text.tertiary}
-              multiline
-              numberOfLines={3}
-            />
-
-            <Text style={[styles.fieldLabel, { marginTop: 16 }]}>
-              Price Breakdown
-            </Text>
-
-            {configure.state.wallType &&
-              configure.state.walls.map((wall) => {
-                const wFt = inToCeilFt(wall.widthIn);
-                const hFt = inToCeilFt(wall.heightIn);
-                const cost = configure.state.wallType!.unit_price * wFt * hFt;
-                if (cost === 0) return null;
-                return (
-                  <View key={wall.id} style={styles.summaryLine}>
-                    <Text style={styles.summaryLineName}>
-                      Wall {wall.id} — {configure.state.wallType!.name}
-                    </Text>
-                    <Text style={styles.summaryLineValue}>
-                      ${cost.toLocaleString()}
-                    </Text>
-                  </View>
-                );
-              })}
-
-            {Object.entries(configure.state.wallAddOns).map(
-              ([wallId, wallOptions]) =>
-                Object.entries(wallOptions).map(([optionId, qty]) => {
-                  const option = allOptions.find((o) => o.id === optionId);
-                  if (!option) return null;
-                  const wall = configure.state.walls.find(
-                    (w) => w.id === wallId,
-                  );
-                  const isArea =
-                    option.name.toLowerCase().includes("transom glass") ||
-                    option.name.toLowerCase().includes("kneewall glass");
-                  const wFt = inToCeilFt(wall?.widthIn || "");
-                  const hFt = inToCeilFt(wall?.heightIn || "");
-                  const quantity = isArea ? wFt * hFt : parseFloat(qty) || 0;
-                  const cost = option.unit_price * quantity;
-                  if (cost === 0) return null;
-                  return (
-                    <View
-                      key={`${wallId}-${optionId}`}
-                      style={styles.summaryLine}
-                    >
-                      <Text style={styles.summaryLineName}>
-                        Wall {wallId} — {option.name} × {quantity}{" "}
-                        {option.unit_type.replace("_", " ")}
-                      </Text>
-                      <Text style={styles.summaryLineValue}>
-                        ${cost.toLocaleString()}
-                      </Text>
-                    </View>
-                  );
-                }),
-            )}
-
-            {configure.state.roofType &&
-              (() => {
-                let roofCost = 0;
-                let roofDetail = "";
-                if (configure.state.roofStyle === "roof_only") {
-                  const w = inToCeilFt(configure.state.roofOnlyWidthIn);
-                  const d = inToCeilFt(configure.state.roofOnlyDepthIn);
-                  roofCost = configure.state.roofType.unit_price * w * d;
-                  roofDetail = `${configure.state.roofOnlyWidthIn}″ × ${configure.state.roofOnlyDepthIn}″ → ${w} × ${d} ft`;
-                } else {
-                  const bWall = configure.state.walls.find((w) => w.id === "B");
-                  const width = inToCeilFt(bWall?.widthIn || "");
-                  let depth = 0;
-                  if (configure.state.numberOfWalls === 1) {
-                    depth = inToCeilFt(configure.state.projectionDistance);
-                  } else {
-                    const sideWall = configure.state.walls.find(
-                      (w) => w.id === "A" || w.id === "C",
-                    );
-                    depth = inToCeilFt(sideWall?.widthIn || "");
-                  }
-                  roofCost =
-                    configure.state.roofType.unit_price *
-                    (width + 2) *
-                    (depth + 1);
-                  roofDetail = `(${width}+2) × (${depth}+1) ft incl. overhangs`;
-                }
-                if (roofCost === 0) return null;
-                return (
-                  <View style={styles.summaryLine}>
-                    <Text style={styles.summaryLineName}>
-                      Roof — {configure.state.roofType.name}
-                      {"\n"}
-                      <Text
-                        style={{ fontSize: FontSize.body, color: Colors.text.tertiary }}
-                      >
-                        {roofDetail}
-                      </Text>
-                    </Text>
-                    <Text style={styles.summaryLineValue}>
-                      ${roofCost.toLocaleString()}
-                    </Text>
-                  </View>
-                );
-              })()}
-
-            {checkedLineItems.map((option) => {
-              const qty =
-                parseFloat(configure.getLineItemQuantity(option.id)) || 0;
-              const cost = option.unit_price * qty;
-              if (cost === 0) return null;
-              return (
-                <View key={option.id} style={styles.summaryLine}>
-                  <Text style={styles.summaryLineName}>
-                    {option.name} × {qty} {option.unit_type.replace("_", " ")}
-                  </Text>
-                  <Text style={styles.summaryLineValue}>
-                    ${cost.toLocaleString()}
-                  </Text>
-                </View>
-              );
-            })}
-
-            {checkedRoofAddOns.map((option) => {
-              const qty =
-                parseFloat(configure.state.roofAddOns[option.id]) || 0;
-              const cost = option.unit_price * qty;
-              if (cost === 0) return null;
-              return (
-                <View key={option.id} style={styles.summaryLine}>
-                  <Text style={styles.summaryLineName}>
-                    {option.name} × {qty} {option.unit_type.replace("_", " ")}
-                  </Text>
-                  <Text style={styles.summaryLineValue}>
-                    ${cost.toLocaleString()}
-                  </Text>
-                </View>
-              );
-            })}
-
-            <View style={styles.grandTotalRow}>
-              <Text style={styles.grandTotalLabel}>Estimated Total</Text>
-              <Text style={styles.grandTotalValue}>
-                ${grandTotal.toLocaleString()}
-              </Text>
-            </View>
-
-            <View style={{ height: 100 }} />
-          </View>
-        );
-      }
+      case 9:
+        return <Step9Summary configure={configure} allOptions={allOptions} />;
 
       default:
         return null;
@@ -1307,6 +581,25 @@ export default function ConfigureScreen() {
 }
 
 const styles = StyleSheet.create({
+  headerBack: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginLeft: 6,
+  },
+  headerBackIcon: {
+    fontSize: 26,
+    lineHeight: 28,
+    color: Colors.primary,
+    fontWeight: "600",
+    marginTop: -3,
+    marginLeft: -1,
+  },
   container: { flex: 1, backgroundColor: Colors.background },
   centered: {
     flex: 1,
@@ -1318,138 +611,6 @@ const styles = StyleSheet.create({
   },
   scroll: { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 32 },
-  stepContent: { gap: 12 },
-  stepTitle: {
-    fontSize: FontSize.sectionTitle,
-    fontWeight: "700",
-    color: Colors.text.primary,
-    marginBottom: 4,
-  },
-  stepTitleRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  stepSubtotal: {
-    fontSize: FontSize.label,
-    fontWeight: "700",
-    color: Colors.status.complete,
-  },
-  fieldLabel: {
-    fontSize: FontSize.body,
-    fontWeight: "700",
-    color: Colors.text.primary,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginTop: 8,
-  },
-  // The -8 cancels the parent's `gap: 12` so the hint sits ~4px under its label.
-  // This ONLY works when the hint's parent supplies that gap — always place a
-  // fieldLabel+fieldHint pair inside `stepContent` or a `fieldBlock` (both gap:12),
-  // never a bare <View>, or the negative margin overlaps the label.
-  fieldHint: {
-    fontSize: FontSize.small,
-    color: Colors.text.tertiary,
-    marginTop: -8,
-  },
-  // Wrapper for a group of fields/labels/hints — mirrors stepContent's gap so the
-  // fieldHint spacing math holds inside nested blocks too.
-  fieldBlock: { gap: 12 },
-  optionGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  optionCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 10,
-    padding: 14,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    minWidth: "47%",
-    flex: 1,
-    gap: 3,
-  },
-  optionCardSelected: {
-    borderColor: Colors.primary,
-    backgroundColor: Colors.primaryTint,
-  },
-  optionName: { fontSize: FontSize.callout, fontWeight: "600", color: Colors.text.primary },
-  optionNameSelected: { color: Colors.primary },
-  optionDesc: { fontSize: FontSize.body, color: Colors.text.tertiary },
-  wallCountRow: { flexDirection: "row", gap: 10 },
-  wallCountCard: {
-    flex: 1,
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    paddingVertical: 20,
-    alignItems: "center",
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    gap: 4,
-  },
-  wallCountCardSelected: {
-    borderColor: Colors.primary,
-    backgroundColor: Colors.primaryTint,
-  },
-  wallCountNumber: {
-    fontSize: FontSize.displayLarge,
-    fontWeight: "700",
-    color: Colors.text.secondary,
-  },
-  wallCountNumberSelected: { color: Colors.primary },
-  wallCountLabel: { fontSize: FontSize.small, color: Colors.text.tertiary },
-  noteInput: {
-    backgroundColor: Colors.surface,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: 12,
-    fontSize: FontSize.callout,
-    color: Colors.text.primary,
-    textAlignVertical: "top",
-    minHeight: 60,
-  },
-  textInput: {
-    backgroundColor: Colors.surface,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: 12,
-    fontSize: FontSize.label,
-    color: Colors.text.primary,
-  },
-  notesInput: { height: 80, textAlignVertical: "top" },
-  summaryLine: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 8,
-    borderBottomWidth: 0.5,
-    borderBottomColor: Colors.border,
-  },
-  summaryLineName: {
-    flex: 1,
-    fontSize: FontSize.body,
-    color: Colors.text.secondary,
-    paddingRight: 8,
-  },
-  summaryLineValue: {
-    fontSize: FontSize.body,
-    fontWeight: "600",
-    color: Colors.text.primary,
-  },
-  grandTotalRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingTop: 16,
-    marginTop: 8,
-  },
-  grandTotalLabel: {
-    fontSize: FontSize.label,
-    fontWeight: "700",
-    color: Colors.text.primary,
-  },
-  grandTotalValue: {
-    fontSize: FontSize.sectionTitle,
-    fontWeight: "700",
-    color: Colors.status.complete,
-  },
   footer: {
     backgroundColor: Colors.surface,
     borderTopWidth: 0.5,
@@ -1531,45 +692,4 @@ const styles = StyleSheet.create({
   generateEarlyText: { fontSize: FontSize.body, fontWeight: "600", color: Colors.primary },
   loadingText: { fontSize: FontSize.callout, color: Colors.text.secondary },
   errorText: { fontSize: FontSize.label, color: Colors.status.failed, textAlign: "center" },
-  roofDimsRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginTop: 8,
-  },
-  roofDimLabel: {
-    fontSize: FontSize.body,
-    fontWeight: "600",
-    color: Colors.text.tertiary,
-    textTransform: "uppercase",
-    letterSpacing: 0.4,
-    marginBottom: 4,
-  },
-  roofDimSep: {
-    fontSize: FontSize.title,
-    fontWeight: "300",
-    color: Colors.text.tertiary,
-    marginTop: 20,
-  },
-  roofDimConvert: {
-    fontSize: FontSize.small,
-    color: Colors.text.tertiary,
-    textAlign: "center",
-    fontStyle: "italic",
-    marginTop: 2,
-  },
-  roofDimResult: {
-    backgroundColor: Colors.primaryTint,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    marginTop: 20,
-    borderWidth: 1,
-    borderColor: Colors.primary,
-  },
-  roofDimResultText: {
-    fontSize: FontSize.body,
-    fontWeight: "700",
-    color: Colors.primary,
-  },
 });

@@ -1,10 +1,13 @@
+import FlowNav from "@/components/FlowNav";
 import { Colors } from "@/constants/Colors";
 import { FontSize } from "@/constants/Typography";
+import { useDesignSession } from "@/contexts/DesignSession";
 import { getSession } from "@/services/api";
+import { confirmLeave } from "@/utils/confirm";
 import * as Print from "expo-print";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams, useNavigation } from "expo-router";
 import * as Sharing from "expo-sharing";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -93,6 +96,17 @@ export default function QuoteScreen() {
       totalPrice: string;
       priceBreakdown: string;
     }>();
+
+  const navigation = useNavigation();
+  const { reachStep } = useDesignSession();
+
+  useLayoutEffect(() => {
+    navigation.setOptions({ headerTitle: () => <FlowNav current={4} /> });
+  }, [navigation]);
+
+  useEffect(() => {
+    reachStep(4);
+  }, []);
 
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -768,9 +782,24 @@ ${
             <Text style={styles.totalValue}>{totalFormatted}</Text>
           </View>
         </View>
+        {/* ─── end "Quote Summary" — everything above mirrors PDF page 1 ─── */}
+
+        {/* "Your Investment & Financing" — mirrors the PDF's page 2, which
+            reuses this same header band with a different tagline as its page
+            title (see buildQuoteHTML below, ".page2" / "Your Investment &
+            Financing"). On-screen this is one continuous scroll rather than an
+            actual page break, but the same visual break marks where the
+            content, order, and figures below match PDF page 2 one-for-one —
+            those stay hand-synced with the PDF template until the two are
+            unified into one source of truth (tracked, not started here). */}
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.company}>CHAMPION</Text>
+            <Text style={styles.tagline}>YOUR INVESTMENT & FINANCING</Text>
+          </View>
+        </View>
 
         {/* ─── Factory Direct Promotion ─── */}
-        <View style={styles.divider} />
         <Text style={styles.sectionLabel}>
           FACTORY DIRECT PROMOTION (SAVINGS)
         </Text>
@@ -907,7 +936,13 @@ ${
           </Pressable>
           <Pressable
             style={styles.secondaryButton}
-            onPress={() => router.dismissAll()}
+            onPress={() =>
+              confirmLeave(
+                "Start a new design? This design is saved in your sessions — you can reopen it from the home screen anytime.",
+                () => router.dismissAll(),
+                { title: "Start a new design?", confirmText: "New Design" },
+              )
+            }
           >
             <Text style={styles.secondaryButtonText}>New Design</Text>
           </Pressable>

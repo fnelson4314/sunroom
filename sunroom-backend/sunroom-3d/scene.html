@@ -29,8 +29,11 @@
       })();
 
       function fcHex(name) {
+        // "tan" is a light cream, not the darker khaki-tan 0xb89a6a used before
+        // (user 2026-07-14, applies to both glass sunrooms and screen rooms —
+        // both product types route through this same fcHex).
         return (
-          { white: 0xe2e2e2, tan: 0xb89a6a, bronze: 0x3e2810 }[name] ?? 0xe2e2e2
+          { white: 0xe2e2e2, tan: 0xe6d8b0, bronze: 0x3e2810 }[name] ?? 0xe2e2e2
         );
       }
       function rgbHex(r, g, b) {
@@ -56,6 +59,20 @@
       // suspends) and would clobber it back to null — which silently disabled the
       // glass sky-reflection until now, making dark glass read as a solid panel.
       var SKY_ENV; // equirect sky texture, set in renderScene
+      // "kontext" when the composite feeds the image-EDITING repaint (see
+      // payload.repaintMode): glass gets photoreal reflections because Kontext
+      // anchors its output tone to the input pixels. Any other value = legacy
+      // canny glass (low reflection so white frames keep edge contrast).
+      // Bare declaration on purpose — same clobber note as SKY_ENV above.
+      var GLASS_STYLE;
+      // Feet the roof rises above the eave: the gable peak, the studio shed's
+      // high (house) end, and the gable/wing infill all measure from here.
+      // Derived in renderScene from the configured mountHeight (ground → peak /
+      // wing-top). 0 = not supplied, every consumer falls back to the old
+      // hardcoded guess (gable 0.42×wallH, studio 8% of the depth) — which is a
+      // ~1:12 shed pitch and could not match a real roof at any depth.
+      // Bare declaration on purpose — same clobber note as SKY_ENV above.
+      var ROOF_RISE;
 
       function glassMat(hex, opacity = 0.8) {
         // Semi-transparent dark glass with a sky sheen — reads as real glass.
@@ -67,25 +84,29 @@
         // (see the interior occluder box + gable backing in renderScene/buildGable).
         // Then the glass shows a uniform dark room + sky reflection — exactly how
         // real sunroom glass photographs — with no background structure to copy.
+        // Two glass styles, picked by the AI repaint consuming the composite:
+        //  - canny (legacy): LOW reflection on purpose. A strong sky reflection
+        //    washes the glass light, the WHITE frames lose contrast, and Canny
+        //    drops thin mullions (wrong panel count / merged panels). For canny
+        //    the final glass tone comes from the prompt, not the composite.
+        //  - kontext: the model anchors output tone to the INPUT pixels, so the
+        //    composite must LOOK like the target — dark tinted glass with a
+        //    visible sky-reflection sheen (the dim interior comes from the
+        //    occluder box behind the glass, unchanged).
+        const kontext = GLASS_STYLE === "kontext";
         const m = new THREE.MeshPhysicalMaterial({
           color: hex,
           transparent: true,
           opacity,
-          // LOW reflection on purpose. A strong sky reflection washes the glass
-          // light, so the WHITE frames lose contrast against it and Canny drops
-          // the thin mullions (→ wrong panel count / merged panels in the output).
-          // Dark, low-reflection glass keeps the white frames high-contrast so
-          // Canny traces every frame. The FINAL glass tone is set by the prompt,
-          // not this composite color, so dark composite glass ≠ dark output.
-          roughness: 0.3,
+          roughness: kontext ? 0.12 : 0.3,
           metalness: 0.0,
-          clearcoat: 0.15,
-          clearcoatRoughness: 0.2,
-          reflectivity: 0.2,
-          envMapIntensity: 0.2,
+          clearcoat: kontext ? 0.5 : 0.15,
+          clearcoatRoughness: kontext ? 0.12 : 0.2,
+          reflectivity: kontext ? 0.5 : 0.2,
+          envMapIntensity: kontext ? 0.65 : 0.2,
           side: THREE.DoubleSide,
         });
-        if (SKY_ENV) m.envMap = SKY_ENV; // subtle sky sheen only — kept low on purpose
+        if (SKY_ENV) m.envMap = SKY_ENV;
         return m;
       }
       function solidMat(hex) {
@@ -93,6 +114,14 @@
           color: hex,
           roughness: 0.65,
           metalness: 0.05,
+          // DoubleSide for the same reason screenMat/glassMat/shingleMat are:
+          // the front wall is mirrored (scale.x=-1), which flips the winding, so
+          // a FrontSide FLAT face on it is backface-culled. Every solid gable/
+          // wing FACE lives on that wall in one combo or the other, and a solid
+          // wing simply vanished there — the mullions (closed boxes) still drew,
+          // so it read as see-through with pane dividers floating in it (user
+          // report 2026-07-27). Boxes are unaffected; this only rescues planes.
+          side: THREE.DoubleSide,
         });
       }
       function frameMat(hex) {
@@ -177,7 +206,40 @@
         t.repeat.set(2, 2); // tune for course density if needed
         return t;
       }
-      function shingleMat(hex) {
+      // Real-world shingle course exposure. The texture tile has SHINGLE_ROWS
+      // courses, so a tile covers ROWS*EXPOSURE inches; shingleTiles(ft) converts
+      // a real dimension to texture repeats so course spacing matches reality at
+      // any roof size (a 20ft roof gets ~2× the courses of a 10ft one).
+      const SHINGLE_EXPOSURE_IN = 6, SHINGLE_ROWS = 7;
+      const shingleTiles = (ft) => (ft * 12) / (SHINGLE_EXPOSURE_IN * SHINGLE_ROWS);
+      function shingleMat(hex, repX, repY) {
+        // Roof PLANES (called WITH texture-repeat args) are UNLIT. The scene's
+        // bright warm lights (ambient + directional, both warm-white) washed the
+        // dark shingle out to a light TAN — from a low front angle the studio
+        // roof edge became a bright tan line that read as a fascia trim, a
+        // different color than the white frames (user report 2026-07-21, proven
+        // by tinting the roof magenta and seeing exactly that eave sliver light
+        // up). Real asphalt shingle is dark; MeshBasic renders the map's own dark
+        // tone (SHINGLE_TEX base #39342d + course lines) immune to the light
+        // wash, so the composite roof stays dark like a real one. The SOLID
+        // gable/wing FACE (called with NO reps) keeps the lit standard material.
+        if (repX != null) {
+          const m = new THREE.MeshBasicMaterial({
+            // Map carries the dark shingle colour + courses; white lets it show
+            // at its own value (tinting by hex here would double-darken to near
+            // black and hide the courses). Dark fallback if the texture is absent
+            // so a missing map can never render a WHITE roof.
+            color: SHINGLE_TEX ? 0xffffff : 0x2e2a25,
+            side: THREE.DoubleSide,
+          });
+          if (SHINGLE_TEX) {
+            const t = SHINGLE_TEX.clone();
+            t.needsUpdate = true;
+            t.repeat.set(repX, repY);
+            m.map = t;
+          }
+          return m;
+        }
         const m = new THREE.MeshStandardMaterial({
           color: hex,
           roughness: 0.93,
@@ -185,7 +247,7 @@
           side: THREE.DoubleSide, // camera is below the roofline — without this the
           // single-sided slopes get backface-culled and the roof renders invisible
         });
-        if (SHINGLE_TEX) m.map = SHINGLE_TEX; // course lines for Canny
+        if (SHINGLE_TEX) m.map = SHINGLE_TEX; // course lines (legacy shared repeat)
         return m;
       }
 
@@ -285,19 +347,22 @@
           g.add(box(dw, sw, 0.16, fmat, w / 2, botY + sw / 2, 0)); // bottom rail
           g.add(box(dw, sw * 1.15, 0.16, fmat, w / 2, midY, 0)); // mid rail
           // Lever handle on the latch stile, just above the mid rail (~grip height).
+          // White in kontext mode (real product); grey for canny edge contrast.
           g.add(
-            box(fw * 1.8, fw * 0.5, fw * 0.9, solidMat(0x888888), x1 - fw * 2.0, midY + glH * 0.06, 0.09),
+            box(
+              fw * 1.8, fw * 0.5, fw * 0.9,
+              solidMat(GLASS_STYLE === "kontext" ? 0xdadada : 0x888888),
+              x1 - fw * 2.0, midY + glH * 0.06, 0.09,
+            ),
           );
         }
         if (!isScreen && isDoor && ["sliding", "french"].includes(unit.door_style)) {
-          // Bold center meeting stile so Canny reads TWO glass panels (a sliding
-          // glass door), not a single narrow entry door.
-          g.add(box(fw, glH, D * 1.6, fmat, w / 2, glCY, 0.012));
-          const hmat = new THREE.MeshStandardMaterial({
-            color: 0x8f8f8f,
-            roughness: 0.4,
-            metalness: 0.55,
-          });
+          // Center meeting stile, mode-split: canny needed a BOLD 1.7× stile so
+          // the edge map read a sliding door instead of two narrow fixed panels;
+          // kontext copies the composite pixels literally, so the stile must be
+          // THIN like the real door's split (user request 2026-07-13).
+          const stileW = GLASS_STYLE === "kontext" ? fw * 0.9 : fw * 1.7;
+          g.add(box(stileW, glH, D * 1.6, fmat, w / 2, glCY, 0.012));
           if (unit.door_style === "sliding") {
             // Backwards-C pull handle (a curved arc opening toward the left), on the
             // left leaf clear of the frame, a partial torus in the door plane so its
@@ -308,29 +373,83 @@
             // in-plane rotation that orients the opening.
             const handleX = fw * 2.2;
             const camZ = mirrored ? -1 : 1;
-            // UNLIT + dark, like the screen mesh: a lit material washes out to
-            // mid-grey here (ambient + fills), which is why the AI missed it. Unlit
-            // renders genuinely dark → strong Canny edge against the white frame.
-            const chMat = new THREE.MeshBasicMaterial({ color: 0x101316 });
-            const R = fw * 0.55,
-              tube = fw * 0.15;
-            const cMesh = new THREE.Mesh(
-              new THREE.TorusGeometry(R, tube, 8, 28, Math.PI * 1.3),
-              chMat,
-            );
-            cMesh.rotation.z = -0.6 * Math.PI; // opening faces left ("Ɔ")
-            cMesh.castShadow = true;
-            const cGroup = new THREE.Group();
-            cGroup.add(cMesh);
-            cGroup.scale.set(1, 1.8, 1); // stretch into a tall C pull
-            cGroup.position.set(handleX, glCY, camZ * (tube + 0.03));
-            g.add(cGroup);
+            // Handle colour is mode-split: canny needed an UNLIT DARK handle (a
+            // lit material washes to mid-grey and Canny missed it; dark = strong
+            // edge against the white frame). Kontext copies the composite pixels
+            // literally, so the handle must look like the REAL product: white,
+            // lit, reading as a 3D pull by its shading (user request 2026-07-13).
+            if (GLASS_STYLE === "kontext") {
+              // Kontext: a CRISP slim vertical bar pull (the real product's white
+              // handle). The soft white C-torus rendered as an indistinct smudge
+              // — a clean box with a hard silhouette survives the repaint.
+              const barMat = new THREE.MeshStandardMaterial({
+                color: 0xdadada,
+                roughness: 0.35,
+                metalness: 0.2,
+              });
+              g.add(box(
+                fw * 0.35, glH * 0.22, fw * 0.35,
+                barMat, handleX, glCY, camZ * (fw * 0.3),
+              ));
+            } else {
+              // Canny: unlit DARK stretched C-torus — a lit material washes to
+              // mid-grey and Canny missed it; dark = strong edge on white frame.
+              const chMat = new THREE.MeshBasicMaterial({ color: 0x101316 });
+              const R = fw * 0.55,
+                tube = fw * 0.15;
+              const cMesh = new THREE.Mesh(
+                new THREE.TorusGeometry(R, tube, 8, 28, Math.PI * 1.3),
+                chMat,
+              );
+              cMesh.rotation.z = -0.6 * Math.PI; // opening faces left ("Ɔ")
+              cMesh.castShadow = true;
+              const cGroup = new THREE.Group();
+              cGroup.add(cMesh);
+              cGroup.scale.set(1, 1.8, 1); // stretch into a tall C pull
+              cGroup.position.set(handleX, glCY, camZ * (tube + 0.03));
+              g.add(cGroup);
+            }
           } else {
             // french: simple pull near the centre where the two leaves meet.
-            g.add(box(fw * 0.35, glH * 0.32, fw * 0.5, hmat, w / 2 + fw * 0.9, glCY, D * 0.95));
+            // Same mode split as the sliding pull: dark unlit for canny edges,
+            // white lit (real product) for kontext.
+            g.add(box(
+              fw * 0.35, glH * 0.32, fw * 0.5,
+              GLASS_STYLE === "kontext"
+                ? new THREE.MeshStandardMaterial({ color: 0xdadada, roughness: 0.35, metalness: 0.2 })
+                : new THREE.MeshBasicMaterial({ color: 0x101316 }),
+              w / 2 + fw * 0.9, glCY, D * 0.95,
+            ));
           }
         }
-        if (isOper) g.add(box(fw * 0.4, glH, D * 1.6, fmat, w / 2, glCY, 0.01));
+        if (isOper) {
+          // Operable slider: ONE unit with a split pane — the operable half is a
+          // separate framed sash sitting slightly PROUD of the fixed half and
+          // overlapping the center meeting line, the way a real horizontal
+          // slider reads. camZ keeps "proud" facing the camera on the mirrored
+          // front wall (local +z points away there — see the mirrored-wall note).
+          const camZ = mirrored ? -1 : 1,
+            sw = fw * 0.45,           // sash frame — noticeably slimmer than the
+            // unit frame (0.7 read too chunky in renders, user 2026-07-13)
+            sx0 = fw,                 // sash = left half of the glass area...
+            sx1 = w / 2 + fw * 0.5,   // ...overlapping the center line slightly
+            sashW = sx1 - sx0,
+            sashZ = camZ * (D / 2 + 0.05),
+            sashD = 0.09;
+          // meeting stile of the fixed half (behind the sash, on the glass plane)
+          g.add(box(fw * 0.4, glH, D * 1.6, fmat, w / 2, glCY, 0.01));
+          // sash pane, proud of the main glass
+          g.add(box(
+            sashW - sw * 2, glH - sw * 2, 0.02,
+            glassMat(0x2f4f5e, 0.85),
+            sx0 + sashW / 2, glCY, sashZ,
+          ));
+          // sash frame: top, bottom, outer stile, bolder meeting stile
+          g.add(box(sashW, sw, sashD, fmat, sx0 + sashW / 2, botY + glH - sw / 2, sashZ));
+          g.add(box(sashW, sw, sashD, fmat, sx0 + sashW / 2, botY + sw / 2, sashZ));
+          g.add(box(sw, glH, sashD, fmat, sx0 + sw / 2, glCY, sashZ));
+          g.add(box(sw * 1.3, glH, sashD, fmat, sx1 - sw * 0.65, glCY, sashZ));
+        }
         if (hasKneewall) {
           const kmat =
             unit.kneewall_mat === "solid"
@@ -350,11 +469,17 @@
       // whose correctness depends on which side of the glass it sits on (the dark
       // gable backing) must consult this. Frame members avoid it by being centred
       // on the glass plane and deeper than it, so they stand proud on both faces.
-      function buildWall(wall, fc, roofStyle, shHex, isGable, includeGableWings = true, mirrored = false, screenOpts = null) {
+      function buildWall(wall, fc, roofStyle, shHex, isGable, includeGableWings = true, mirrored = false, screenOpts = null, hasWing = false) {
         const g = new THREE.Group();
         const fw = wall.frame_width_in / 12,
           wallW = wall.width_in / 12,
           wallH = wall.height_in / 12;
+        // Screen-room transom on a gable/wing wall: that height is EATEN OFF THE
+        // TOP of the wall and drawn as the flat base of the gable/wing shape, so
+        // the structure's total height and the roof stay put — the units below
+        // just stop lower. 0 on every other wall (normal in-cell transom band).
+        const flatH = Math.max(0, Math.min((wall.gable_flat_in || 0) / 12, wallH * 0.5));
+        const unitH = wallH - flatH;
         const fmat = frameMat(fc);
         const isScreenWall = (wall.units || []).some((u) =>
           (u.panel_type || "").startsWith("screen"),
@@ -364,7 +489,7 @@
         const unitSpans = []; // {x0, x1, isDoor} — for skirt/rail gaps at doors
         for (const unit of wall.units) {
           const uw = unit.width_in / 12;
-          const panel = buildPanel(unit, uw, wallH - fw * 2, fw, fc, mirrored);
+          const panel = buildPanel(unit, uw, unitH - fw * 2, fw, fc, mirrored);
           panel.position.set(curX, fw, 0);
           g.add(panel);
           unitSpans.push({
@@ -381,10 +506,27 @@
         // inside an operable window (that one stays fw*0.4 in buildPanel). Drawn
         // proud (forward z) so Canny reads a bold post, not a hairline.
         const postW = fw * 3.0; // wider than the ~2*fw band the panel edges make
+        // On the gable end, the post that continues up to the peak is a beefier
+        // structural king post — thicker than the other between-unit posts. Pick
+        // the divider nearest the wall centre; buildGable picks the same one so
+        // the thick post and its gable mullion line up into one continuous member.
+        const kingDx =
+          isGable && roofStyle === "gable" && dividers.length
+            ? dividers.reduce((a, b) =>
+                Math.abs(b - wallW / 2) < Math.abs(a - wallW / 2) ? b : a,
+              )
+            : null;
         for (const dx of dividers) {
-          g.add(box(postW, wallH - fw * 2, 0.16, fmat, dx, wallH / 2, 0.03));
+          const pw = dx === kingDx ? fw * 4.8 : postW;
+          g.add(box(pw, unitH - fw * 2, 0.16, fmat, dx, unitH / 2, 0.03));
         }
-        g.add(frameBorder(wallW, wallH, 0.12, fw, fmat));
+        // Under-existing skips the wall's own top rail: the eave header beam
+        // (drawn thin below) is the single top member there, so they don't stack
+        // into a chunky band at the roofline (user asked to thin the top frame,
+        // 2026-07-21). Every other roof style keeps the normal top rail.
+        // Top rail lands at unitH — under a gable/wing flat base that IS the
+        // transom rail dividing the units from the flat band above them.
+        g.add(frameBorder(wallW, unitH, 0.12, fw, fmat, roofStyle === "under_existing"));
 
         // ── Screen-room horizontals ────────────────────────────────────────────
         // Kneewall, chairrail and handrail span the WHOLE wall (they're configured
@@ -466,7 +608,15 @@
         }
 
         if (isGable && roofStyle === "gable")
-          g.add(buildGable(wallW, wallH, fw, shHex, wall.gable_glass, fc, dividers, mirrored, isScreenWall));
+          g.add(buildGable(wallW, wallH, fw, shHex, wall.gable_glass, fc, dividers, mirrored, isScreenWall, flatH));
+
+        // Studio: the SIDE wall (A/C) carries the triangular WING under the shed
+        // slope; the FRONT wall (B) sits at the low eave and gets nothing. WHICH
+        // slot that is flips with the combo — see the studio note at the call
+        // sites. Gating this on `!mirrored` put the wing on wall B for every BC
+        // capture (user report 2026-07-27).
+        if (hasWing)
+          g.add(buildWing(wallW, wallH, fw, shHex, wall.gable_glass, fc, dividers, isScreenWall, flatH, mirrored));
 
         // Under-existing: wall panels rise to the eave (wallH = the header). Above
         // that, the area up to the EXISTING roof is filled — drawn tall and clipped
@@ -492,12 +642,14 @@
             const isSolid = !!gg && gg.glassType === "solid";
             const fillMat = isSolid ? solidMat(0xdcd0be) : contMat;
             g.add(box(wallW - fw * 2, fillH, Df, fillMat, wallW / 2, wallH + fillH / 2, 0));
-            // Header beam at the eave (separates the wall panels from the accent above).
-            g.add(box(wallW, fw * 1.4, 0.16, fmat, wallW / 2, wallH, 0));
           } else {
-            // Walls-only: seamless continuation, no accent, no header beam here.
+            // Walls-only: seamless continuation, no accent above the header.
             g.add(box(wallW - fw * 2, fillH, Df, contMat, wallW / 2, wallH + fillH / 2, 0));
           }
+          // Single SLIM header beam at the eave, both flavours (replaces the
+          // skipped wall top rail). Was fw*1.4 and stacked on the top rail — a
+          // chunky band the user asked to thin (2026-07-21).
+          g.add(box(wallW, fw * 0.6, 0.16, fmat, wallW / 2, wallH, 0));
           // Posts continue up through the fill, aligned to the unit dividers.
           // CENTRED on the glass plane (z=0), not pushed to +z: the FRONT wall is
           // mirrored (rotation.y=PI + scale.x=-1 ⇒ local +z faces AWAY from the
@@ -512,11 +664,15 @@
         return g;
       }
 
-      function buildGable(wallW, wallH, fw, shHex, gableGlass, fc, dividers, mirrored = false, isScreen = false) {
+      function buildGable(wallW, wallH, fw, shHex, gableGlass, fc, dividers, mirrored = false, isScreen = false, flatH = 0) {
         const g = new THREE.Group();
-        const gH = wallH * 0.42,
+        const gH = ROOF_RISE > 0 ? ROOF_RISE : wallH * 0.42,
           peakX = wallW / 2,
           peakY = wallH + gH;
+        // flatH > 0 turns the triangle into a PENTAGON: the shape drops flatH
+        // below the eave (that height was taken off the wall's units) and rises
+        // vertically on both sides before sloping to the peak.
+        const baseY = wallH - flatH;
         const D = 0.07;
 
         // Triangular gable face. Glass (with mullions splitting it into the
@@ -530,9 +686,11 @@
         const paneCount = Math.max(1, parseInt(gableGlass && gableGlass.count) || 1);
 
         const shape = new THREE.Shape();
-        shape.moveTo(0, wallH);
-        shape.lineTo(wallW, wallH);
+        shape.moveTo(0, baseY);
+        shape.lineTo(wallW, baseY);
+        if (flatH > 0) shape.lineTo(wallW, wallH); // right flat side
         shape.lineTo(peakX, peakY);
+        if (flatH > 0) shape.lineTo(0, wallH); // left flat side
         shape.closePath();
         // Match the wall glass (dark tint) but a touch more opaque, so the brown
         // roof behind the gable doesn't show through and make it read as roof
@@ -598,16 +756,24 @@
         } else if (isGlass && paneCount > 1) {
           for (let i = 1; i < paneCount; i++) mullionXs.push((wallW / paneCount) * i);
         }
+        // The mullion running up to the peak is the beefier king post (matches
+        // buildWall's kingDx pick — divider nearest the centre), so the thick post
+        // below and this mullion read as one continuous member up to the peak.
+        const kingMx = mullionXs.length
+          ? mullionXs.reduce((a, b) =>
+              Math.abs(b - peakX) < Math.abs(a - peakX) ? b : a,
+            )
+          : null;
         for (const mx of mullionXs) {
           const topY = slopeY(mx);
-          const h = Math.max(0.05, topY - wallH);
+          const h = Math.max(0.05, topY - baseY);
           // Match the between-unit POST width (fw*3.0 in buildWall) so each
           // vertical reads as one continuous post from the unit up into the gable.
           // Depth is CENTRED on the gable face plane (z=0.05) and thicker than it,
           // so the mullion stands proud on both faces. The front wall is mirrored
           // (local +z faces away from the camera), so a shallow +z offset would
           // sink these behind the tinted glass — see the same fix in buildWall.
-          g.add(box(fw * 3.0, h, 0.16, fmat, mx, wallH + h / 2, 0.05));
+          g.add(box(mx === kingMx ? fw * 4.8 : fw * 3.0, h, 0.16, fmat, mx, baseY + h / 2, 0.05));
         }
         // (No separate gable sill — the wall's own top frame rail already sits
         // here. A second bar stacked on it made a double-thick band; one rail
@@ -650,21 +816,114 @@
         return g;
       }
 
+      function buildWing(wallW, wallH, fw, shHex, gableGlass, fc, dividers, isScreen = false, flatH = 0, mirrored = false) {
+        // Studio shed-roof WING: right-triangle fill between the SIDE wall's top
+        // and the sloping roof — rise = wallW*0.08 (matching buildRoof's slope,
+        // the side wall's width IS the projection depth) at the HOUSE end,
+        // tapering to nothing at the front eave. Was entirely missing:
+        // buildWall only filled above the wall for gable / under_existing, so
+        // studio wing config was silently dropped (user report 2026-07-19).
+        // Material logic mirrors buildGable.
+        // WHICH end is the house depends on the slot: the un-mirrored side wall
+        // (AB frame) runs house→front, so it's local x=0; the mirrored slot (the
+        // BC frame's side wall, spanning world X) runs front→house, so it's
+        // local x=wallW. `hiX` is the high (house) end either way.
+        const g = new THREE.Group();
+        const hiX = mirrored ? wallW : 0;
+        // Must match buildRoof's studio slope exactly, or the wing and the roof
+        // it fills under disagree.
+        const rise = ROOF_RISE > 0 ? ROOF_RISE : wallW * 0.08;
+        // Same deal as buildGable: flatH drops the base below the eave (that
+        // height came off the wall's units), so the right triangle becomes a
+        // right trapezoid instead of growing the structure taller.
+        const baseY = wallH - flatH;
+        const glassType = gableGlass && gableGlass.glassType;
+        const isGlass = !!gableGlass && glassType !== "solid";
+
+        const shape = new THREE.Shape();
+        shape.moveTo(0, baseY);
+        shape.lineTo(wallW, baseY);
+        if (mirrored) {
+          shape.lineTo(wallW, wallH + rise); // high (house) end
+          if (flatH > 0) shape.lineTo(0, wallH); // low (front eave) end
+        } else {
+          if (flatH > 0) shape.lineTo(wallW, wallH); // low (front eave) end
+          shape.lineTo(0, wallH + rise); // high (house) end
+        }
+        shape.closePath();
+        const faceMat = isGlass
+          ? isScreen
+            ? screenMat()
+            : glassMat(0x2b4754, 0.8)
+          : gableGlass && glassType === "solid"
+            ? solidMat(0xc8bcaa)
+            : shingleMat(shHex);
+        const face = new THREE.Mesh(new THREE.ShapeGeometry(shape), faceMat);
+        face.position.z = 0.05;
+        face.castShadow = true;
+        g.add(face);
+
+        // Dark backing behind GLASS so the house/sky doesn't bleed through (the
+        // interior occluder stops at the wall top — same as the gable backing).
+        // It MUST sit on the far side of the glass FROM THE CAMERA, and the
+        // mirrored slot z-flips (see buildGable's identical note); screen mesh is
+        // opaque, no plate.
+        if (isGlass && !isScreen) {
+          const back = new THREE.Mesh(
+            new THREE.ShapeGeometry(shape),
+            new THREE.MeshBasicMaterial({ color: 0x171c1f, side: THREE.DoubleSide }),
+          );
+          back.position.z = mirrored ? 0.25 : -0.2;
+          g.add(back);
+        }
+
+        const fmat = frameMat(fc);
+        // Verticals continue the unit posts up into the wing (same divider
+        // alignment as buildGable); skip stubs near the front eave.
+        const slopeY = (x) => wallH + rise * (1 - Math.abs(x - hiX) / wallW);
+        for (const mx of dividers || []) {
+          const h = slopeY(mx) - baseY;
+          if (h < 0.18) continue;
+          g.add(box(fw * 3.0, h, 0.16, fmat, mx, baseY + h / 2, 0.05));
+        }
+        // NO rake trim along the sloped top edge. A bar there closes the wing
+        // triangle into a bounded outline, which (1) the AI repaint reads as a
+        // SOLID panel instead of screen and (2) gets painted as a distinct tan
+        // fascia line outlining the roof (user report 2026-07-21). The roof's
+        // own eave provides the top edge; the screen mesh runs up to it clean.
+        return g;
+      }
+
       function buildRoof(wallW_B, wallW_C, wallH, roofStyle, shHex, fc, gableOnFront = false) {
         const g = new THREE.Group(),
-          smat = shingleMat(shHex),
           fmat = frameMat(fc),
-          OH = 1.0; // ~1 ft roof overhang on every side (eaves + gable rakes)
+          // Roof overhang (eaves + gable rakes). The product's aluminum roof is
+          // nearly flush — a small trim/gutter lip, NOT a 1-ft residential
+          // overhang; the old 1.0 kept reading as "sticking out past the house"
+          // in renders (user 2026-07-13).
+          OH = 0.45;
         // AB pair: gable end faces the camera, so the whole gable roof is mirrored
         // to run front-to-back — ridge along Z (at x=wallW_C/2), gable triangles at
         // the front (z=wallW_B, over wall B) and house side. Built as explicit quads
         // (double-sided) so winding never culls a slope.
         if (roofStyle === "gable" && gableOnFront) {
-          const gH = wallH * 0.42,
+          const gH = ROOF_RISE > 0 ? ROOF_RISE : wallH * 0.42,
             ridgeX = wallW_C / 2,
             peakY = wallH + gH,
-            z0 = -OH,
+            // z0 = 0: the roof ends exactly AT the house wall plane. The old
+            // 1-ft rear tuck (z0=-OH, to hide the junction seam for canny)
+            // projected sideways over the house bricks from the capture angle —
+            // the persistent "corner overhang" — and every render copied it.
+            // Kontext blends the roof/house junction on its own; no tuck needed.
+            z0 = 0,
             z1 = wallW_B + OH;
+          // Course density for these slopes: u runs along the ridge (z), v runs
+          // ridge→eave. NOTE the quads MUST carry a uv attribute — without one the
+          // shingle map samples a single texel and the AB roof rendered as a flat
+          // lineless surface (no courses for Canny to read).
+          const slopeLen = Math.sqrt((wallW_C / 2 + OH) ** 2 + gH ** 2),
+            uRep = shingleTiles(z1 - z0),
+            vRep = shingleTiles(slopeLen);
           const quad = (a, b, c, d, hex) => {
             const geo = new THREE.BufferGeometry();
             geo.setAttribute(
@@ -674,8 +933,16 @@
                 3,
               ),
             );
+            // a,b = ridge edge; c,d = eave edge. Unit UVs; density via repeat.
+            geo.setAttribute(
+              "uv",
+              new THREE.BufferAttribute(
+                new Float32Array([0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1]),
+                2,
+              ),
+            );
             geo.computeVertexNormals();
-            const mat = shingleMat(hex);
+            const mat = shingleMat(hex, uRep, vRep);
             mat.side = THREE.DoubleSide;
             const m = new THREE.Mesh(geo, mat);
             m.castShadow = m.receiveShadow = true;
@@ -683,24 +950,26 @@
           };
           const rA = [ridgeX, peakY, z0],
             rB = [ridgeX, peakY, z1];
-          // left slope (falls to x=0 side) — shaded; right slope — lit
-          g.add(quad(rA, rB, [-OH, wallH, z1], [-OH, wallH, z0], darken(shHex, 25)));
-          g.add(
-            quad(
-              rA,
-              rB,
-              [wallW_C + OH, wallH, z1],
-              [wallW_C + OH, wallH, z0],
-              shHex,
-            ),
-          );
-          // white fascia boards under the two eaves (run front-to-back along Z)
-          g.add(box(0.4, 0.4, wallW_B + OH * 2, fmat, -OH, wallH - 0.2, wallW_B / 2));
-          g.add(
-            box(0.4, 0.4, wallW_B + OH * 2, fmat, wallW_C + OH, wallH - 0.2, wallW_B / 2),
-          );
+          // left slope (falls to x=0 side) — shaded; right slope — lit.
+          // The eaves TAPER: full ±OH overhang at the FRONT (matches the gable
+          // rake) narrowing to flush with the wall plane at the house side, so
+          // the roof dies INTO the house instead of hanging a corner + gutter
+          // stub over the bricks (the awkward corners circled 2026-07-13).
+          g.add(quad(rA, rB, [-OH, wallH, z1], [0, wallH, z0], darken(shHex, 25)));
+          g.add(quad(rA, rB, [wallW_C + OH, wallH, z1], [wallW_C, wallH, z0], shHex));
+          // White fascia boards under the eaves, SLANTED to follow the tapered
+          // eave edge (front overhang → flush at the house, z 0..z1).
+          const fascia = (xNear, xFar) => {
+            const dx = xFar - xNear,
+              len = Math.sqrt(dx * dx + z1 * z1),
+              bar = box(0.4, 0.4, len, fmat, (xNear + xFar) / 2, wallH - 0.2, z1 / 2);
+            bar.rotation.y = Math.atan2(dx, z1);
+            return bar;
+          };
+          g.add(fascia(0, -OH));
+          g.add(fascia(wallW_C, wallW_C + OH));
         } else if (roofStyle === "gable") {
-          const gH = wallH * 0.42,
+          const gH = ROOF_RISE > 0 ? ROOF_RISE : wallH * 0.42,
             ridgeZ = wallW_B / 2;
           const pLen = Math.sqrt(ridgeZ ** 2 + gH ** 2),
             pAng = Math.atan2(gH, ridgeZ);
@@ -709,10 +978,14 @@
           // and overlap — that overlap was the rough/doubled peak in the composite.
           const dy = (OH / 2) * (gH / pLen),
             dz = (OH / 2) * (ridgeZ / pLen);
+          // Course density scaled to real dims (plane UVs are 0..1: u = width,
+          // v = slope direction, courses run parallel to the ridge).
+          const bcU = shingleTiles(wallW_C + OH * 2),
+            bcV = shingleTiles(pLen + OH);
           // house-side slope: rises from z=0 to ridge at z=ridgeZ
           const lm = new THREE.Mesh(
             new THREE.PlaneGeometry(wallW_C + OH * 2, pLen + OH),
-            smat,
+            shingleMat(shHex, bcU, bcV),
           );
           lm.rotation.x = Math.PI / 2 - pAng;
           lm.position.set(wallW_C / 2, wallH + gH / 2 - dy, ridgeZ / 2 - dz);
@@ -721,7 +994,7 @@
           // front slope: falls from ridge at z=ridgeZ to z=wallW_B
           const rm = new THREE.Mesh(
             new THREE.PlaneGeometry(wallW_C + OH * 2, pLen + OH),
-            shingleMat(darken(shHex, 25)),
+            shingleMat(darken(shHex, 25), bcU, bcV),
           );
           rm.rotation.x = -(Math.PI / 2 - pAng);
           rm.position.set(wallW_C / 2, wallH + gH / 2 - dy, ridgeZ + ridgeZ / 2 + dz);
@@ -746,21 +1019,57 @@
             ),
           );
         } else {
-          const slope = wallW_B * 0.08,
-            pAng = Math.atan2(slope, wallW_B);
-          const pLen = Math.sqrt(wallW_B ** 2 + slope ** 2) + OH;
-          // studio slope: runs from z=0 (house) to z=wallW_B (front)
+          // Studio shed roof: HIGH at the house sloping DOWN to the front eave.
+          // The rotation sign was inverted for a long time — the roof floated
+          // above the FRONT wall and dove down INTO the house (user report
+          // 2026-07-19). The gable branch's π/2−pAng rises with z; the shed must
+          // fall with z.
+          //
+          // WHICH axis runs house→front flips with the wall combo. gableOnFront
+          // means the front slot holds wall B, i.e. the AB frame: house at z=0,
+          // depth along Z. The BC frame is TRANSPOSED — there the side wall is
+          // the front slot, spanning world X with the house at x=wallW_C — so
+          // build the shed canonically (width along X, depth along +Z, high at
+          // z=0) and rotate it into place. Without this the shed sloped ALONG
+          // the front wall on every BC capture (user report 2026-07-27).
+          const alongX = !gableOnFront;
+          const depth = alongX ? wallW_C : wallW_B;
+          const width = alongX ? wallW_B : wallW_C;
+          const slope = ROOF_RISE > 0 ? ROOF_RISE : depth * 0.08,
+            pAng = Math.atan2(slope, depth);
+          const pLen = Math.sqrt(depth ** 2 + slope ** 2) + OH;
+          const sg = new THREE.Group();
           const rm = new THREE.Mesh(
-            new THREE.PlaneGeometry(wallW_C + OH * 2, pLen),
-            smat,
+            new THREE.PlaneGeometry(width + OH * 2, pLen),
+            shingleMat(shHex, shingleTiles(width + OH * 2), shingleTiles(pLen)),
           );
-          rm.rotation.x = Math.PI / 2 - pAng;
-          rm.position.set(wallW_C / 2, wallH + slope / 2, wallW_B / 2);
+          rm.rotation.x = -(Math.PI / 2 - pAng);
+          // Center shifted OH/2 down-slope so the top edge is FLUSH at the house
+          // wall (nothing pokes over the bricks — same lesson as the removed
+          // gable rear tuck) and the whole OH overhang lands at the front eave.
+          rm.position.set(
+            width / 2,
+            wallH + slope / 2 - (OH / 2) * Math.sin(pAng),
+            depth / 2 + (OH / 2) * Math.cos(pAng),
+          );
           rm.castShadow = rm.receiveShadow = true;
-          g.add(rm);
-          g.add(
-            box(wallW_C + OH * 2, 0.15, 0.1, fmat, wallW_C / 2, wallH, -OH),
-          );
+          sg.add(rm);
+          if (alongX) {
+            // rotation.y=-π/2 maps local (x,y,z) → world (-z, y, x); the +x shift
+            // then puts the high end (local z=0) at the house, x=wallW_C, and the
+            // low eave at x=0.
+            sg.rotation.y = -Math.PI / 2;
+            sg.position.x = wallW_C;
+          }
+          g.add(sg);
+          // NO front fascia board. That thin board along the front eave WAS the
+          // "tan line outlining the roof": whatever colour it was given (white, or
+          // a dark tone), the warm scene lights washed it to a light tan strip
+          // spanning the whole eave, a different colour from the frames — proven
+          // by tinting it and watching exactly that strip light up (user report,
+          // three rounds, 2026-07-21). The unlit dark roof plane and its overhang
+          // already give the eave its edge and depth, so the board is pure
+          // liability. Gone.
         }
         return g;
       }
@@ -903,7 +1212,13 @@
         cx.clip();
         cx.drawImage(photoImg, 0, 0, photoW, photoH);
         cx.restore();
-        strokeHeader(cx, "#" + (frameHex >>> 0).toString(16).padStart(6, "0"));
+        // NO header-beam stroke on the composite. It was drawn in the frame
+        // colour along the traced roofline — with a tan frame that rendered as a
+        // bright tan line tracing the exact roofline the user outlined, which
+        // they wanted gone (2026-07-21). The walls already rise to the roofline,
+        // so they meet the existing roof cleanly without a painted-on beam. The
+        // MASK still marks this strip as structure (below), so the AI repaints
+        // the wall-to-roof junction — just without a crude coloured line baked in.
         const composite = cc.toDataURL("image/jpeg", 0.95);
 
         // Mask: black out above the roofline; header beam is white (it IS
@@ -958,6 +1273,7 @@
         // picks it up. Direct equirect envMap (reliable); PMREM IBL is a bonus
         // only if the software renderer supports it.
         SKY_ENV = makeSkyTexture();
+        GLASS_STYLE = payload.repaintMode || null; // before geometry — glassMat reads it
         SHINGLE_TEX = makeShingleTexture(); // roof shingle courses for Canny
         try {
           const pmrem = new THREE.PMREMGenerator(renderer);
@@ -988,30 +1304,42 @@
         // cSpec = the front wall (faces the camera).
         // Fallback for older payloads with no combo: infer it from the wall set
         // (A present + no C ⇒ AB; otherwise BC).
+        // Single flat wall (1-wall "nook fill"): only wall B, drawn flat in the
+        // z=0 plane facing the camera — no side wall, no depth, no roof.
+        const singleWall = payload.singleWall === true;
         let combo = payload.wallCombo;
-        if (combo !== "AB" && combo !== "BC") {
+        if (!singleWall && combo !== "AB" && combo !== "BC") {
           const ids = new Set(walls.map((w) => w.wall_id));
           combo = ids.has("A") && !ids.has("C") ? "AB" : "BC";
         }
         const pick = (id, idx) => walls.find((w) => w.wall_id === id) || walls[idx];
         let bSpec, cSpec;
-        if (combo === "AB") {
+        if (singleWall) {
+          bSpec = pick("B", 0);
+          cSpec = null;
+        } else if (combo === "AB") {
           bSpec = pick("A", 0);
           cSpec = pick("B", 1);
         } else {
           bSpec = pick("B", 0);
           cSpec = pick("C", 1);
         }
-        const wallW_B = (bSpec?.width_in || 216) / 12;
-        const wallW_C = (cSpec?.width_in || 120) / 12;
+        // Single wall: bSpec IS the front wall (its width faces the camera), with
+        // a token depth so the interior occluder/shadow have thickness.
+        const wallW_B = singleWall ? 0.5 : (bSpec?.width_in || 216) / 12;
+        const wallW_C = singleWall
+          ? (bSpec?.width_in || 120) / 12
+          : (cSpec?.width_in || 120) / 12;
         // The gable end belongs to wall B. In the BC pair (and 3-wall) B is the
         // side wall (bSpec) so the gable faces sideways — ridge along X. In the AB
         // pair B is the FRONT wall (cSpec), so the gable faces the camera — the
         // roof ridge and gable end are mirrored to run front-to-back (along Z).
         const gableOnFront = !!cSpec && cSpec.wall_id === "B";
+        // CONFIGURED side-wall height, read before the fitted override below.
+        const configuredWallH = (bSpec?.height_in || 96) / 12;
         // Use the PnP-fitted height so the structure seats on the patio. Falls
         // back to the configured height if auto-fit wasn't provided.
-        let wallH = camera.solvedHeight || (bSpec?.height_in || 96) / 12;
+        let wallH = camera.solvedHeight || configuredWallH;
         // CRITICAL: buildWall reads wall.height_in internally, so override both
         // wall specs to the fitted height — otherwise the walls stay at the
         // configured height while the roof sits at the fitted height, and they
@@ -1020,12 +1348,27 @@
           if (bSpec) bSpec.height_in = wallH * 12;
           if (cSpec) cSpec.height_in = wallH * 12;
         }
+        // Roof rise above the eave, from the configured mountHeight (ground →
+        // peak / wing-top). Scaled by the same factor the PnP auto-fit applied to
+        // the walls, so the roof stays proportional to the box actually drawn —
+        // otherwise a fitted-taller structure gets a roof that's relatively flat.
+        // 0 (no mountHeight, or one at/below the wall height) leaves every
+        // consumer on its old hardcoded default.
+        const mountH = (roof.mount_height_in || 0) / 12;
+        ROOF_RISE =
+          mountH > configuredWallH && configuredWallH > 0
+            ? (mountH - configuredWallH) * (wallH / configuredWallH)
+            : 0;
         const fc = fcHex(frameColour);
         const roofStyle = roof.style;
         // Under-existing: no NEW roof — walls rise to the EXISTING house roof.
         // Overshoot the fitted height so the walls clear the traced roofline
         // everywhere; applyUnderExisting() then clips them exactly to that line.
-        const underExisting = roofStyle === "under_existing";
+        // A single flat wall NEVER uses this machinery: it already tops out at the
+        // clicked opening, so the 2×wallH interior occluder + roofline clip + header
+        // beam don't apply (the tall occluder was bleeding charcoal into the sky
+        // above the opening — user report on a 1-wall under-existing screen room).
+        const underExisting = roofStyle === "under_existing" && !singleWall;
         // Under-existing only: whether to add a NEW gable/wing accent above the
         // header (true, default) or keep the EXISTING gable and just run the walls
         // up to it ("walls only", false). No effect on other roof styles.
@@ -1045,6 +1388,16 @@
           wallW_C,
           "wallH:",
           wallH,
+        );
+        // Which real wall landed in which slot, and each one's gable/wing flat
+        // base. flat=0 on the wing wall means the transom never reached the
+        // renderer and the wing draws as a plain triangle instead of the right
+        // trapezoid the 2D configurator shows.
+        console.log(
+          `[scene] combo=${combo} roof=${roofStyle} rise=${ROOF_RISE.toFixed(2)}ft` +
+            ` | side slot=${bSpec?.wall_id} flat=${bSpec?.gable_flat_in || 0}in` +
+            ` | front slot=${cSpec?.wall_id} flat=${cSpec?.gable_flat_in || 0}in` +
+            ` | wing=${roofStyle === "studio" ? (gableOnFront ? bSpec?.wall_id : cSpec?.wall_id) : "n/a"}`,
         );
 
         // ── Camera (PnP) ──
@@ -1099,24 +1452,40 @@
         // every other product line, in which case buildWall draws none of them.
         const screenOpts = payload.screenOptions || null;
 
-        if (bSpec) {
-          // Side wall: plain rotation, local +z stays on the camera side.
-          const wallB = buildWall(bSpec, fc, roofStyle, shHex, !gableOnFront, includeGableWings, false, screenOpts);
-          wallB.rotation.y = -Math.PI / 2;
-          wallB.position.set(0, 0, 0);
-          sunroom.add(wallB);
+        // Studio shed: the WING belongs to the wall that runs house→front (a side
+        // wall, A or C), never to the front wall B. In the AB frame that's the
+        // x=0 slot; the BC frame is transposed and it's the z=wallW_B slot — the
+        // same flip buildRoof's studio branch makes. gableOnFront ⇔ AB frame.
+        const studioWing = roofStyle === "studio";
+
+        if (singleWall) {
+          // Flat nook-fill wall: draw wall B in the z=0 plane facing the camera.
+          // No rotation (local +z faces the camera), no side wall, no gable — the
+          // opening's top edge IS the wall top. roofStyle forced to a plain style
+          // so buildWall skips the gable/wing/under-existing fill above the units.
+          const flat = buildWall(bSpec, fc, "gable", shHex, false, includeGableWings, false, screenOpts, false);
+          flat.position.set(0, 0, 0);
+          sunroom.add(flat);
+        } else {
+          if (bSpec) {
+            // Side wall: plain rotation, local +z stays on the camera side.
+            const wallB = buildWall(bSpec, fc, roofStyle, shHex, !gableOnFront, includeGableWings, false, screenOpts, studioWing && gableOnFront);
+            wallB.rotation.y = -Math.PI / 2;
+            wallB.position.set(0, 0, 0);
+            sunroom.add(wallB);
+          }
+
+          if (cSpec) {
+            // Front wall: rotation.y=PI + scale.x=-1 ⇒ z-flip, so it's `mirrored`.
+            const wallC = buildWall(cSpec, fc, roofStyle, shHex, gableOnFront, includeGableWings, true, screenOpts, studioWing && !gableOnFront);
+            wallC.rotation.y = Math.PI;
+            wallC.scale.x = -1;
+            wallC.position.set(0, 0, wallW_B);
+            sunroom.add(wallC);
+          }
         }
 
-        if (cSpec) {
-          // Front wall: rotation.y=PI + scale.x=-1 ⇒ z-flip, so it's `mirrored`.
-          const wallC = buildWall(cSpec, fc, roofStyle, shHex, gableOnFront, includeGableWings, true, screenOpts);
-          wallC.rotation.y = Math.PI;
-          wallC.scale.x = -1;
-          wallC.position.set(0, 0, wallW_B);
-          sunroom.add(wallC);
-        }
-
-        if (!underExisting)
+        if (!underExisting && !singleWall)
           sunroom.add(buildRoof(wallW_B, wallW_C, wallH, roofStyle, shHex, fc, gableOnFront));
         sunroom.add(buildShadow(wallW_B, wallW_C));
 
@@ -1140,7 +1509,10 @@
             ),
             new THREE.MeshBasicMaterial({ color: 0x171c1f }),
           );
-          interior.position.set(wallW_C / 2, ih / 2 + 0.1, wallW_B / 2);
+          // Single flat wall faces +Z (camera side), so its dark interior sits
+          // just BEHIND it (−z); the L-shape's front wall is at z=wallW_B with the
+          // interior in front of it (smaller z), so it centres on wallW_B/2.
+          interior.position.set(wallW_C / 2, ih / 2 + 0.1, singleWall ? -0.3 : wallW_B / 2);
           sunroom.add(interior);
         }
 
@@ -1236,7 +1608,14 @@
           }
         });
         scene.background = new THREE.Color(0x000000);
-        scene.overrideMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        // DoubleSide: the front wall is mirrored (scale.x=-1) so its winding is
+        // flipped, and a FrontSide override culled every FLAT face on it — the
+        // gable/wing triangles were missing from the mask (closed boxes still
+        // filled in, which is why only those two showed the hole).
+        scene.overrideMaterial = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          side: THREE.DoubleSide,
+        });
         renderer.render(scene, cam);
         let maskURL = canvas.toDataURL("image/png");
         scene.overrideMaterial = null;

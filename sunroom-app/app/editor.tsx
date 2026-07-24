@@ -1,7 +1,10 @@
+import FlowNav from "@/components/FlowNav";
 import { Colors } from "@/constants/Colors";
 import { FontSize } from "@/constants/Typography";
-import { router, useLocalSearchParams } from "expo-router";
-import { useMemo, useRef, useState } from "react";
+import { useDesignSession } from "@/contexts/DesignSession";
+import { confirmLeave } from "@/utils/confirm";
+import { router, useLocalSearchParams, useNavigation } from "expo-router";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Image,
   NativeScrollEvent,
@@ -41,6 +44,14 @@ export default function EditorScreen() {
     priceBreakdown: string;
   }>();
 
+  const navigation = useNavigation();
+  const { reachStep, setDraftId, setLastRender, lastRender } =
+    useDesignSession();
+
+  useLayoutEffect(() => {
+    navigation.setOptions({ headerTitle: () => <FlowNav current={3} /> });
+  }, [navigation]);
+
   // The set of renders to choose from. Prefer the variations array; fall back to
   // the single render_url so older flows keep working.
   const urls = useMemo<string[]>(() => {
@@ -54,6 +65,17 @@ export default function EditorScreen() {
     if (list.length === 0 && renderUrl) list = [renderUrl];
     return list;
   }, [renderUrls, renderUrl]);
+
+  // Mark Design reached and keep the shared session pointed at this render so the
+  // back-nav menu can return here / go to Quote. Don't clobber a real render key
+  // set by the generator (only fill in when the context has nothing yet).
+  useEffect(() => {
+    reachStep(2);
+    if (draftId) setDraftId(draftId);
+    if (!lastRender && sessionId && urls.length > 0) {
+      setLastRender({ key: "", sessionId, renderUrls: urls });
+    }
+  }, []);
 
   const isGallery = urls.length > 1;
 
@@ -119,7 +141,11 @@ export default function EditorScreen() {
   };
 
   const handleNewDesign = () => {
-    router.dismissAll();
+    confirmLeave(
+      "Start a new design? This design is saved in your sessions — you can reopen it from the home screen anytime.",
+      () => router.dismissAll(),
+      { title: "Start a new design?", confirmText: "New Design" },
+    );
   };
 
   // A single render filling the available area, with graceful fallback.

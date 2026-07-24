@@ -1,3 +1,6 @@
+import LineItemRow from "@/components/configure/LineItemRow";
+import { fitCanvasToBox } from "@/components/configure/wallCanvasMath";
+import Collapsible from "@/components/ui/Collapsible";
 import { Colors } from "@/constants/Colors";
 import { FontSize } from "@/constants/Typography";
 import type {
@@ -8,6 +11,7 @@ import type {
   UnitMaterials,
   WallSelection,
 } from "@/hooks/useConfigureState";
+import { inToFtLabel } from "@/hooks/useConfigureState";
 import React, { useEffect, useState } from "react";
 import {
   Modal,
@@ -19,6 +23,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SolidFill, SolidStylePicker } from "./solids";
 
 export type PanelSection =
   | "glass"
@@ -113,95 +118,6 @@ const GLASS_BLUE = "#b8d9f0";
 const OPER_BLUE = "#6aaed4";
 const DOOR_BLUE = "#6aaed4";
 const SOLID_COLOR = "#e8dfd0";
-const VINYL_LINE = "rgba(0,0,0,0.14)";
-const HARDI_LINE = "rgba(0,0,0,0.18)";
-
-function SolidFill({
-  width,
-  height,
-  material,
-  wallHeightIn,
-  baseColor,
-}: {
-  width: number;
-  height: number;
-  material: SolidMaterial;
-  wallHeightIn: string;
-  baseColor: string;
-}) {
-  if (material === "panel")
-    return <View style={{ width, height, backgroundColor: baseColor }} />;
-  const areaH = Math.max(1, parseFloat(wallHeightIn) || 30);
-  const boardIn = material === "vinyl" ? 4 : 8;
-  const seamCount = Math.ceil(areaH / boardIn);
-  const lineColor = material === "vinyl" ? VINYL_LINE : HARDI_LINE;
-  return (
-    <View
-      style={{ width, height, backgroundColor: baseColor, overflow: "hidden" }}
-    >
-      {Array.from({ length: seamCount }).map((_, i) => {
-        const seamIn = (i + 1) * boardIn;
-        if (seamIn >= areaH) return null;
-        const seamPx = Math.round((seamIn / areaH) * height);
-        return (
-          <View
-            key={i}
-            style={{
-              position: "absolute",
-              top: seamPx,
-              left: 0,
-              right: 0,
-              height: 1.5,
-              backgroundColor: lineColor,
-            }}
-          />
-        );
-      })}
-    </View>
-  );
-}
-
-function SolidStylePicker({
-  value,
-  onChange,
-}: {
-  value: SolidMaterial;
-  onChange: (m: SolidMaterial) => void;
-}) {
-  return (
-    <View style={{ flexDirection: "row", gap: 6, marginTop: 6 }}>
-      {[
-        { v: "panel" as const, l: "Solid Panel" },
-        { v: "vinyl" as const, l: 'Vinyl (4")' },
-        { v: "hardieboard" as const, l: 'Hardieboard (8")' },
-      ].map((opt) => (
-        <TouchableOpacity
-          key={opt.v}
-          style={{
-            flex: 1,
-            paddingVertical: 7,
-            borderRadius: 7,
-            borderWidth: 1.5,
-            borderColor: value === opt.v ? "#6b4228" : Colors.border,
-            backgroundColor: value === opt.v ? "#fdf2ee" : Colors.surface,
-            alignItems: "center",
-          }}
-          onPress={() => onChange(opt.v)}
-        >
-          <Text
-            style={{
-              fontSize: FontSize.caption,
-              fontWeight: "600",
-              color: value === opt.v ? "#6b4228" : Colors.text.secondary,
-            }}
-          >
-            {opt.l}
-          </Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
-}
 
 const SECTION_BG: Record<PanelSection, string> = {
   glass: GLASS_BLUE,
@@ -269,6 +185,7 @@ function GableGlassShape({
   frameColor,
   canvasInnerHeight,
   dividerXPositions,
+  kingDivIdx = -1,
 }: {
   wallId: "A" | "B" | "C";
   roofStyle: string | null;
@@ -282,6 +199,7 @@ function GableGlassShape({
   frameColor: string;
   canvasInnerHeight: number;
   dividerXPositions?: number[];
+  kingDivIdx?: number;
 }) {
   const wallH = parseFloat(wallHeightFt) || 0;
   const mountH = parseFloat(mountHeightFt) || 0;
@@ -361,7 +279,7 @@ function GableGlassShape({
             width={innerWidth}
             height={shapeHeight}
             material={config.solidStyle ?? "panel"}
-            wallHeightIn={String(Math.round(riseFt * 12))}
+            areaHeightIn={String(Math.round(riseFt * 12))}
             baseColor={SOLID_COLOR}
           />
         ) : (
@@ -381,6 +299,7 @@ function GableGlassShape({
           const xPx =
             dividerXPositions?.[i] ??
             Math.round(((i + 1) / config.count) * innerWidth);
+          const w = i === kingDivIdx ? Math.round(frameWidth * 1.7) : frameWidth;
           return (
             <View
               key={i}
@@ -389,9 +308,9 @@ function GableGlassShape({
                 left: xPx,
                 top: 0,
                 bottom: 0,
-                width: frameWidth,
+                width: w,
                 backgroundColor: frameColor,
-                transform: [{ translateX: -frameWidth / 2 }],
+                transform: [{ translateX: -w / 2 }],
               }}
             />
           );
@@ -492,7 +411,7 @@ function PanelUnit({
                   width={(unitWidthPx ?? 80) / 2}
                   height={transomPx}
                   material={solidPanelMaterial}
-                  wallHeightIn={transomHeightIn || "18"}
+                  areaHeightIn={transomHeightIn || "18"}
                   baseColor={SOLID_COLOR}
                 />
               ) : (
@@ -508,7 +427,7 @@ function PanelUnit({
                   width={(unitWidthPx ?? 80) / 2}
                   height={transomPx}
                   material={solidPanelMaterial}
-                  wallHeightIn={transomHeightIn || "18"}
+                  areaHeightIn={transomHeightIn || "18"}
                   baseColor={SOLID_COLOR}
                 />
               ) : (
@@ -522,7 +441,7 @@ function PanelUnit({
               width={unitWidthPx ?? 80}
               height={transomPx}
               material={solidPanelMaterial}
-              wallHeightIn={transomHeightIn || "18"}
+              areaHeightIn={transomHeightIn || "18"}
               baseColor={SOLID_COLOR}
             />
           ) : (
@@ -567,7 +486,7 @@ function PanelUnit({
                   width={(unitWidthPx ?? 80) / 2}
                   height={kneewallPx}
                   material={solidPanelMaterial}
-                  wallHeightIn={kneewallHeightIn || "24"}
+                  areaHeightIn={kneewallHeightIn || "24"}
                   baseColor={SOLID_COLOR}
                 />
               ) : (
@@ -583,7 +502,7 @@ function PanelUnit({
                   width={(unitWidthPx ?? 80) / 2}
                   height={kneewallPx}
                   material={solidPanelMaterial}
-                  wallHeightIn={kneewallHeightIn || "24"}
+                  areaHeightIn={kneewallHeightIn || "24"}
                   baseColor={SOLID_COLOR}
                 />
               ) : (
@@ -597,7 +516,7 @@ function PanelUnit({
               width={unitWidthPx ?? 80}
               height={kneewallPx}
               material={solidPanelMaterial}
-              wallHeightIn={kneewallHeightIn || "24"}
+              areaHeightIn={kneewallHeightIn || "24"}
               baseColor={SOLID_COLOR}
             />
           ) : (
@@ -637,70 +556,51 @@ function HeightOverrideBlock({
   const [open, setOpen] = useState(false);
   const hasOverride = !!currentUnitTransomHeight || !!currentUnitKneewallHeight;
   return (
-    <View style={styles.heightOverrideBlock}>
-      <TouchableOpacity
-        style={{ flexDirection: "row", alignItems: "center", gap: 10 }}
-        onPress={() => setOpen((o) => !o)}
-        activeOpacity={0.7}
-      >
-        <View
-          style={[
-            styles.addOnCheck,
-            (open || hasOverride) && styles.addOnCheckActive,
-          ]}
-        >
-          {(open || hasOverride) && (
-            <Text style={styles.addOnCheckMark}>✓</Text>
-          )}
-        </View>
-        <View style={{ flex: 1, gap: 8 }}>
-          <Text style={styles.materialsTitle}>
-            Override heights for this unit
-          </Text>
-          <Text style={styles.materialsSub}>
-            {hasOverride
-              ? `Custom heights set — tap to ${open ? "collapse" : "edit"}`
-              : `Defaults — transom: ${defaultTransomHeightIn || "not set"}, kneewall: ${defaultKneewallHeightIn || "not set"}`}
-          </Text>
-        </View>
-      </TouchableOpacity>
-      {open && (
-        <View style={[styles.materialsRow, { marginTop: 10 }]}>
-          {hasTransom && (
-            <View style={styles.materialToggle}>
-              <Text style={styles.materialToggleLabel}>Transom (in)</Text>
-              <Text style={styles.overrideHint}>
-                Default: {defaultTransomHeightIn || "not set"}
-              </Text>
-              <TextInput
-                style={styles.overrideInput}
-                value={currentUnitTransomHeight}
-                onChangeText={onUnitTransomHeightChange}
-                keyboardType="decimal-pad"
-                placeholder={defaultTransomHeightIn || "e.g. 18"}
-                placeholderTextColor={Colors.text.tertiary}
-              />
-            </View>
-          )}
-          {hasKneewall && (
-            <View style={styles.materialToggle}>
-              <Text style={styles.materialToggleLabel}>Kneewall (in)</Text>
-              <Text style={styles.overrideHint}>
-                Default: {defaultKneewallHeightIn || "not set"}
-              </Text>
-              <TextInput
-                style={styles.overrideInput}
-                value={currentUnitKneewallHeight}
-                onChangeText={onUnitKneewallHeightChange}
-                keyboardType="decimal-pad"
-                placeholder={defaultKneewallHeightIn || "e.g. 24"}
-                placeholderTextColor={Colors.text.tertiary}
-              />
-            </View>
-          )}
-        </View>
-      )}
-    </View>
+    <Collapsible
+      title="Override heights for this unit"
+      hint={
+        hasOverride
+          ? `Custom heights set — tap to ${open ? "collapse" : "edit"}`
+          : `Defaults — transom: ${defaultTransomHeightIn || "not set"}, kneewall: ${defaultKneewallHeightIn || "not set"}`
+      }
+      expanded={open}
+      onToggle={() => setOpen((o) => !o)}
+    >
+      <View style={[styles.materialsRow, { padding: 14 }]}>
+        {hasTransom && (
+          <View style={styles.materialToggle}>
+            <Text style={styles.materialToggleLabel}>Transom (in)</Text>
+            <Text style={styles.overrideHint}>
+              Default: {defaultTransomHeightIn || "not set"}
+            </Text>
+            <TextInput
+              style={styles.overrideInput}
+              value={currentUnitTransomHeight}
+              onChangeText={onUnitTransomHeightChange}
+              keyboardType="decimal-pad"
+              placeholder={defaultTransomHeightIn || "e.g. 18"}
+              placeholderTextColor={Colors.text.tertiary}
+            />
+          </View>
+        )}
+        {hasKneewall && (
+          <View style={styles.materialToggle}>
+            <Text style={styles.materialToggleLabel}>Kneewall (in)</Text>
+            <Text style={styles.overrideHint}>
+              Default: {defaultKneewallHeightIn || "not set"}
+            </Text>
+            <TextInput
+              style={styles.overrideInput}
+              value={currentUnitKneewallHeight}
+              onChangeText={onUnitKneewallHeightChange}
+              keyboardType="decimal-pad"
+              placeholder={defaultKneewallHeightIn || "e.g. 24"}
+              placeholderTextColor={Colors.text.tertiary}
+            />
+          </View>
+        )}
+      </View>
+    </Collapsible>
   );
 }
 
@@ -1009,156 +909,6 @@ function PanelPickerModal({
   );
 }
 
-function WallAddOnRow({
-  opt,
-  isChecked,
-  qty,
-  onToggle,
-  onQuantityChange,
-}: {
-  opt: Option;
-  isChecked: boolean;
-  qty: string;
-  onToggle: () => void;
-  onQuantityChange: (q: string) => void;
-}) {
-  const isSqFt = opt.unit_type === "sq_ft";
-  const isLinFt = opt.unit_type === "lin_ft";
-  const isEach = !isSqFt && !isLinFt;
-  const [sqW, setSqW] = useState("");
-  const [sqL, setSqL] = useState("");
-  const [linA, setLinA] = useState("");
-  const [linB, setLinB] = useState("");
-  const [linC, setLinC] = useState("");
-  const handleSq = (w: string, l: string) => {
-    const wFt = Math.ceil((parseFloat(w) || 0) / 12);
-    const lFt = Math.ceil((parseFloat(l) || 0) / 12);
-    const r = wFt * lFt;
-    onQuantityChange(r > 0 ? String(r) : "");
-  };
-  const handleLin = (a: string, b: string, c: string) => {
-    const total =
-      (parseFloat(a) || 0) + (parseFloat(b) || 0) + (parseFloat(c) || 0);
-    const r = total > 0 ? Math.ceil(total / 12) : 0;
-    onQuantityChange(r > 0 ? String(r) : "");
-  };
-  return (
-    <View style={styles.addOnRow}>
-      <TouchableOpacity
-        style={[styles.addOnCheck, isChecked && styles.addOnCheckActive]}
-        onPress={() => {
-          onToggle();
-          if (!isChecked && isEach) onQuantityChange("1");
-        }}
-      >
-        {isChecked && <Text style={styles.addOnCheckMark}>✓</Text>}
-      </TouchableOpacity>
-      <View style={{ flex: 1, gap: 4 }}>
-        <View style={styles.addOnRowInfo}>
-          <Text style={styles.addOnRowName} numberOfLines={2}>
-            {opt.name}
-          </Text>
-          <Text style={styles.addOnRowPrice}>
-            ${opt.unit_price.toLocaleString()} /{" "}
-            {opt.unit_type.replace(/_/g, " ")}
-          </Text>
-        </View>
-        {isChecked && (
-          <View style={styles.addOnInputRow}>
-            {isSqFt && (
-              <>
-                <TextInput
-                  style={styles.addOnQtyInput}
-                  value={sqW}
-                  onChangeText={(v) => {
-                    setSqW(v);
-                    handleSq(v, sqL);
-                  }}
-                  keyboardType="decimal-pad"
-                  placeholder="W in"
-                  placeholderTextColor={Colors.text.tertiary}
-                />
-                <Text style={styles.addOnSep}>×</Text>
-                <TextInput
-                  style={styles.addOnQtyInput}
-                  value={sqL}
-                  onChangeText={(v) => {
-                    setSqL(v);
-                    handleSq(sqW, v);
-                  }}
-                  keyboardType="decimal-pad"
-                  placeholder="L in"
-                  placeholderTextColor={Colors.text.tertiary}
-                />
-                {qty ? (
-                  <Text style={styles.addOnCalc}>= {qty} sq ft</Text>
-                ) : null}
-              </>
-            )}
-            {isLinFt && (
-              <>
-                <TextInput
-                  style={styles.addOnQtyInput}
-                  value={linA}
-                  onChangeText={(v) => {
-                    setLinA(v);
-                    handleLin(v, linB, linC);
-                  }}
-                  keyboardType="decimal-pad"
-                  placeholder="in"
-                  placeholderTextColor={Colors.text.tertiary}
-                />
-                <Text style={styles.addOnSep}>+</Text>
-                <TextInput
-                  style={styles.addOnQtyInput}
-                  value={linB}
-                  onChangeText={(v) => {
-                    setLinB(v);
-                    handleLin(linA, v, linC);
-                  }}
-                  keyboardType="decimal-pad"
-                  placeholder="in"
-                  placeholderTextColor={Colors.text.tertiary}
-                />
-                <Text style={styles.addOnSep}>+</Text>
-                <TextInput
-                  style={styles.addOnQtyInput}
-                  value={linC}
-                  onChangeText={(v) => {
-                    setLinC(v);
-                    handleLin(linA, linB, v);
-                  }}
-                  keyboardType="decimal-pad"
-                  placeholder="in"
-                  placeholderTextColor={Colors.text.tertiary}
-                />
-                {qty ? (
-                  <Text style={styles.addOnCalc}>= {qty} lin ft</Text>
-                ) : null}
-              </>
-            )}
-            {isEach && (
-              <TextInput
-                style={styles.addOnQtyInput}
-                value={qty}
-                onChangeText={onQuantityChange}
-                keyboardType="decimal-pad"
-                placeholder="Qty"
-                placeholderTextColor={Colors.text.tertiary}
-              />
-            )}
-            {qty ? (
-              <Text style={styles.addOnRowTotal}>
-                ${(opt.unit_price * (parseFloat(qty) || 0)).toLocaleString()}
-              </Text>
-            ) : null}
-          </View>
-        )}
-      </View>
-    </View>
-  );
-}
-
 function WallAddOnsSection({
   wallId,
   allOptions,
@@ -1184,39 +934,41 @@ function WallAddOnsSection({
     (o) => wallAddOns[o.id] !== undefined,
   ).length;
   return (
-    <View style={styles.addOnSection}>
-      <TouchableOpacity
-        style={styles.addOnSectionHeader}
-        onPress={() => setExpanded((e) => !e)}
-        activeOpacity={0.7}
-      >
-        <View>
-          <Text style={styles.addOnSectionTitle}>
-            Wall {wallId} — Additional Options
-          </Text>
-          <Text style={styles.addOnSectionSub}>
-            {activeCount > 0
-              ? `${activeCount} selected`
-              : "Doors, handrails, underbuilds, etc."}
-          </Text>
-        </View>
-        <Text style={styles.addOnChevron}>{expanded ? "▲" : "▼"}</Text>
-      </TouchableOpacity>
-      {expanded && (
-        <View style={styles.addOnList}>
-          {addOnOptions.map((opt) => (
-            <WallAddOnRow
+    <Collapsible
+      title={`Wall ${wallId} — Additional Options`}
+      hint={
+        activeCount > 0
+          ? `${activeCount} selected`
+          : "Doors, handrails, underbuilds, etc."
+      }
+      expanded={expanded}
+      onToggle={() => setExpanded((e) => !e)}
+    >
+      <View style={{ padding: 14, gap: 8 }}>
+        {addOnOptions.map((opt) => {
+          const isChecked = wallAddOns[opt.id] !== undefined;
+          // "each"-priced add-ons (a door, a handrail) default to qty 1 the
+          // moment they're checked, so the user isn't forced to also type "1";
+          // sq_ft/lin_ft items stay blank since they're computed from dims.
+          const isEach = opt.unit_type !== "sq_ft" && opt.unit_type !== "lin_ft";
+          return (
+            <LineItemRow
               key={opt.id}
-              opt={opt}
-              isChecked={wallAddOns[opt.id] !== undefined}
-              qty={wallAddOns[opt.id] || ""}
-              onToggle={() => onToggle(opt.id)}
+              name={opt.name}
+              unitPrice={opt.unit_price}
+              unitType={opt.unit_type}
+              isChecked={isChecked}
+              quantity={wallAddOns[opt.id] || ""}
+              onToggle={() => {
+                onToggle(opt.id);
+                if (!isChecked && isEach) onQuantityChange(opt.id, "1");
+              }}
               onQuantityChange={(q) => onQuantityChange(opt.id, q)}
             />
-          ))}
-        </View>
-      )}
-    </View>
+          );
+        })}
+      </View>
+    </Collapsible>
   );
 }
 
@@ -1294,7 +1046,9 @@ interface WallBuilderProps {
 
 const FRAME_COLORS = {
   white: { frame: "#d0d0d0", swatch: "#e8e8e8", label: "White" },
-  tan: { frame: "#b89a6a", swatch: "#cdb88a", label: "Tan" },
+  // Light cream, not the darker khaki-tan used before (user 2026-07-14) —
+  // matches fcHex("tan") in scene.html, the actual composite render color.
+  tan: { frame: "#e6d8b0", swatch: "#f2e9cc", label: "Tan" },
   bronze: { frame: "#3e2810", swatch: "#6b4228", label: "Bronze" },
 } as const;
 
@@ -1384,15 +1138,23 @@ export default function WallBuilder({
     count: activeWall?.units ?? 1,
   };
 
+  // Every eligible wall, not just the tab being viewed — same fix as
+  // ScreenRoomBuilder: a wall you never opened kept gableGlass=null and silently
+  // lost its gable/wing (and its share of the transom) in the 3D composite.
   useEffect(() => {
-    if (canHaveGableGlass && activeWall && activeWall.gableGlass === null) {
-      onGableGlassChange(activeWall.id, {
-        glassType: "uninsulated",
-        solidStyle: "panel",
-        count: activeWall.units,
-      });
+    for (const w of walls) {
+      const eligible =
+        (w.id === "B" && roofStyle === "gable") ||
+        (w.id !== "B" && roofStyle === "studio");
+      if (eligible && w.gableGlass === null) {
+        onGableGlassChange(w.id, {
+          glassType: "uninsulated",
+          solidStyle: "panel",
+          count: w.units,
+        });
+      }
     }
-  }, [canHaveGableGlass, activeWallId]);
+  }, [roofStyle, walls.length]);
 
   useEffect(() => {
     if (
@@ -1438,10 +1200,16 @@ export default function WallBuilder({
   const wallWFt = wallWIn / 12;
   const wallHFt = wallHIn / 12;
   const aspectRatio = wallWFt > 0 && wallHFt > 0 ? wallWFt / wallHFt : 2;
-  const clampedAspect = Math.min(Math.max(aspectRatio, 0.8), 4);
-  const canvasHeight = Math.min(
-    Math.max(Math.round(CANVAS_MAX_WIDTH / clampedAspect), 200),
-    480,
+  // Fit the wall's TRUE aspect inside a max box — same fix as ScreenRoomBuilder.
+  // Pinning the width and only flexing a capped height drew tall walls far wider
+  // than they are (84w × 102h rendered at 680/480 ≈ 1.4:1, not its real 0.82:1).
+  const CANVAS_MAX_HEIGHT = 480;
+  const CANVAS_MIN_WIDTH = 220; // keeps units tappable on extremely narrow walls
+  const { width: canvasWidth, height: canvasHeight } = fitCanvasToBox(
+    aspectRatio,
+    CANVAS_MAX_WIDTH,
+    CANVAS_MAX_HEIGHT,
+    CANVAS_MIN_WIDTH,
   );
   const canvasInnerHeight = canvasHeight - 24;
   const pricingWFt = ceilFt(activeWall?.widthIn || "");
@@ -1456,7 +1224,7 @@ export default function WallBuilder({
   // Proportional unit pixel widths — mirrors ScreenRoomBuilder logic exactly
   const CANVAS_PADDING = 12;
   const availableForUnits =
-    CANVAS_MAX_WIDTH - 2 * CANVAS_PADDING - (activeWall.units - 1) * frameWidth;
+    canvasWidth - 2 * CANVAS_PADDING - (activeWall.units - 1) * frameWidth;
   const rawWidths =
     activeWall.unitWidths.length === activeWall.units
       ? activeWall.unitWidths
@@ -1483,6 +1251,20 @@ export default function WallBuilder({
       cumX += frameWidth;
     }
   }
+
+  // The frame running up to the gable peak is a beefier king post. Pick the
+  // divider nearest the wall centre; only wall B has a centred gable peak.
+  const kingDivIdx =
+    activeWall?.id === "B" && roofStyle === "gable" && gableDivXPositions.length
+      ? gableDivXPositions.reduce(
+          (best, x, i) =>
+            Math.abs(x - canvasWidth / 2) <
+            Math.abs(gableDivXPositions[best] - canvasWidth / 2)
+              ? i
+              : best,
+          0,
+        )
+      : -1;
 
   const autoAddedKeys = Object.keys(wallAddOns[activeWall?.id ?? ""] ?? {});
 
@@ -1631,7 +1413,9 @@ export default function WallBuilder({
                 placeholderTextColor={Colors.text.tertiary}
               />
               {pricingWFt > 0 && (
-                <Text style={styles.dimConvert}>= {pricingWFt} ft</Text>
+                <Text style={styles.dimConvert}>
+                  = {inToFtLabel(activeWall.widthIn)} ft
+                </Text>
               )}
             </View>
             <View style={styles.dimField}>
@@ -1647,7 +1431,9 @@ export default function WallBuilder({
                 placeholderTextColor={Colors.text.tertiary}
               />
               {pricingHFt > 0 && (
-                <Text style={styles.dimConvert}>= {pricingHFt} ft</Text>
+                <Text style={styles.dimConvert}>
+                  = {inToFtLabel(activeWall.heightIn)} ft
+                </Text>
               )}
             </View>
             <View style={styles.dimField}>
@@ -1843,22 +1629,24 @@ export default function WallBuilder({
                 wallId={activeWall.id}
                 roofStyle={roofStyle}
                 wallHeightFt={wallHeightFtStr}
-                mountHeightFt={mountHeight}
+                // mountHeight state is INCHES; this prop parses as feet
+                mountHeightFt={String((parseFloat(mountHeight) || 0) / 12)}
                 transomHeightIn={
                   activeWall.unitTransomHeights[0] || defaultTransomHeightIn
                 }
                 wallHasTransom={wallHasTransom}
                 config={activeWall.gableGlass}
-                innerWidth={CANVAS_MAX_WIDTH}
+                innerWidth={canvasWidth}
                 frameWidth={frameWidth}
                 frameColor={dynamicFrameColor}
                 canvasInnerHeight={canvasInnerHeight}
                 dividerXPositions={gableDivXPositions}
+                kingDivIdx={kingDivIdx}
               />
             )}
             <View
               style={{
-                width: CANVAS_MAX_WIDTH,
+                width: canvasWidth,
                 height: canvasHeight,
                 backgroundColor: dynamicFrameColor,
                 borderTopLeftRadius: activeWall.gableGlass ? 0 : 8,
@@ -1884,7 +1672,10 @@ export default function WallBuilder({
                           style={[
                             styles.unitDivider,
                             {
-                              width: frameWidth,
+                              width:
+                                i - 1 === kingDivIdx
+                                  ? Math.round(frameWidth * 1.7)
+                                  : frameWidth,
                               backgroundColor: dynamicFrameColor,
                             },
                           ]}
@@ -1997,22 +1788,12 @@ export default function WallBuilder({
       </View>
 
       {hasDims && (anyWallHasTransom || anyWallHasKneewall) && (
-        <View style={styles.sectionCard}>
-          <TouchableOpacity
-            style={styles.collapsibleHeader}
-            onPress={() => setPanelDetailsOpen((o) => !o)}
-            activeOpacity={0.7}
-          >
-            <View>
-              <Text style={styles.sectionLabel}>
-                Panel Details — Wall {activeWall.id}
-              </Text>
-              <Text style={styles.sectionHint}>Heights, framing & splits</Text>
-            </View>
-            <Text style={styles.chevron}>{panelDetailsOpen ? "▲" : "▼"}</Text>
-          </TouchableOpacity>
-          {panelDetailsOpen && (
-            <View style={styles.collapsibleBody}>
+        <Collapsible
+          title={`Panel Details — Wall ${activeWall.id}`}
+          hint="Heights, framing & splits"
+          expanded={panelDetailsOpen}
+          onToggle={() => setPanelDetailsOpen((o) => !o)}
+        >
               {(anyWallHasTransom || anyWallHasKneewall) && (
                 <View style={styles.sectionBlock}>
                   <Text style={styles.subLabel}>
@@ -2132,9 +1913,7 @@ export default function WallBuilder({
                   </View>
                 </View>
               )}
-            </View>
-          )}
-        </View>
+        </Collapsible>
       )}
 
       {hasDims && (
@@ -2370,14 +2149,6 @@ const styles = StyleSheet.create({
     borderColor: Colors.primary,
   },
   autoChipText: { fontSize: FontSize.caption, fontWeight: "600", color: Colors.primary },
-  collapsibleHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: 14,
-  },
-  collapsibleBody: { borderTopWidth: 0.5, borderTopColor: Colors.border },
-  chevron: { fontSize: FontSize.caption, color: Colors.text.tertiary },
   splitRow: { flexDirection: "row", gap: 8 },
   splitToggle: {
     flex: 1,
@@ -2481,76 +2252,6 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: Colors.text.primary,
   },
-  addOnSection: {
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surface,
-    overflow: "hidden",
-  },
-  addOnSectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: 14,
-  },
-  addOnSectionTitle: {
-    fontSize: FontSize.body,
-    fontWeight: "700",
-    color: Colors.text.primary,
-  },
-  addOnSectionSub: { fontSize: FontSize.caption, color: Colors.text.tertiary, marginTop: 2 },
-  addOnChevron: { fontSize: FontSize.caption, color: Colors.text.tertiary },
-  addOnList: { borderTopWidth: 1, borderTopColor: Colors.border },
-  addOnRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderBottomWidth: 0.5,
-    borderBottomColor: Colors.border,
-  },
-  addOnCheck: {
-    width: 22,
-    height: 22,
-    borderRadius: 5,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    backgroundColor: Colors.background,
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: 0,
-  },
-  addOnCheckActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primary,
-  },
-  addOnCheckMark: { fontSize: FontSize.small, fontWeight: "700", color: "#fff" },
-  addOnRowInfo: { flex: 1, gap: 1 },
-  addOnRowName: { fontSize: FontSize.small, fontWeight: "500", color: Colors.text.primary },
-  addOnRowPrice: { fontSize: FontSize.small, color: Colors.text.tertiary },
-  addOnQtyInput: {
-    width: 60,
-    backgroundColor: Colors.background,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: 6,
-    fontSize: FontSize.body,
-    fontWeight: "600",
-    color: Colors.text.primary,
-    textAlign: "center",
-  },
-  addOnRowTotal: { fontSize: FontSize.small, fontWeight: "700", color: Colors.primary },
-  addOnInputRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexWrap: "wrap",
-    gap: 6,
-  },
-  addOnSep: { fontSize: FontSize.body, fontWeight: "600", color: Colors.text.secondary },
-  addOnCalc: { fontSize: FontSize.caption, color: Colors.text.tertiary, fontStyle: "italic" },
   backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)" },
   sheet: {
     backgroundColor: Colors.surface,

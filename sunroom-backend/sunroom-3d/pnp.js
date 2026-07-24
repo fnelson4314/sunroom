@@ -416,7 +416,7 @@ function solveCamera(pts, dims, photoW, photoH) {
     [0, 0, wallW_B],
   ];
   // Optional 6th correspondence: the TOP of the shared corner post
-  // (0, wallH, wallW_B). Under-existing captures supply it for free � the
+  // (0, wallH, wallW_B). Under-existing captures supply it for free � the
   // first roofline trace tap sits exactly there. Without it, the 5 points
   // leave a family of camera poses that all fit yet disagree about where the
   // corner TOP lands, and the drawn corner visibly DROOPS below the real one.
@@ -551,9 +551,9 @@ function solveCamera(pts, dims, photoW, photoH) {
 
 // Physical plausibility of a candidate pose for a HAND-HELD CAPTURE PHOTO,
 // as a soft penalty in pixels added to fit error during candidate selection.
-// Pure reprojection can crown absurd cameras: on a real capture, a 14.5�-fov
-// camera 30ft up / 65ft away with 16� of roll beat the physical solution
-// (47� fov, 6.4ft high, 2.5px) by 0.6px � and drew a drooping, warped
+// Pure reprojection can crown absurd cameras: on a real capture, a 14.5�-fov
+// camera 30ft up / 65ft away with 16� of roll beat the physical solution
+// (47� fov, 6.4ft high, 2.5px) by 0.6px � and drew a drooping, warped
 // composite. Soft penalties (not hard rejects) so a genuinely zoomed/elevated
 // photo can still win if the evidence is strong.
 function plausibilityPenalty(sol, wallH) {
@@ -603,34 +603,65 @@ function betterScore(a, b) {
 /**
  * solveCameraAutoHeight — seat the structure on the markers automatically.
  *
- * The configured wall height rarely matches the height the clicked markers
- * actually imply, which makes the structure float (it's pinned at the bottom,
- * so raising the config height only grows the top upward). Instead we sweep a
- * range of heights, solve the camera for each, and keep the one with the lowest
- * reprojection — i.e. the height at which all 5 markers (top AND bottom) line
- * up, so the base sits on the patio. The chosen height is returned as
- * `solvedHeight` (feet) for scene.html to use for the geometry; the configured
- * height stays untouched as the product spec.
+ * The two TOP markers (pt0/pt1) sit at world height H; the three ground markers
+ * are height-independent. So the wall height is what decides where the drawn TOP
+ * corners land in the image — and the CONFIGURED height rarely matches the height
+ * the clicked markers actually imply. Anchoring the sweep to the config value
+ * (the old `configH × [0.8..1.5]`) meant a too-tall config could never reach the
+ * true height at all: config 12ft floored the sweep at 9.6ft, so a room the
+ * markers implied at 9ft rendered with its top corners ~20px high (user report
+ * 2026-07-20 — "top corners don't match the plotted points"). The bottom stayed
+ * seated because ground markers don't move with H, which is exactly the symptom.
+ *
+ * Fix: sweep an ABSOLUTE plausible wall-height range, INDEPENDENT of the config
+ * input, then golden-section refine to nail the exact height the markers imply.
+ * The clicked points, not the typed height, place the corners. The chosen height
+ * is returned as `solvedHeight` (feet) for scene.html; the configured height
+ * stays untouched as the product spec (pricing).
  */
 function solveCameraAutoHeight(pts, dims, photoW, photoH) {
   const baseH = dims.wallH || 8;
-  const factors = [0.8, 0.9, 1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5];
-  let best = null;
-  for (const f of factors) {
-    const h = baseH * f;
+  const score = (cam) => cam.meanReprojErr + (cam.plausibility || 0);
+  const solveAt = (h) => {
     const cam = solveCamera(pts, Object.assign({}, dims, { wallH: h }), photoW, photoH);
-    // Select on overall mean error (the ground markers are already weighted
-    // heavily inside solveCamera, so the chosen camera seats the base; selecting
-    // on ground error alone picks too-short heights that blow out the top).
-    const score = cam.meanReprojErr + (cam.plausibility || 0);
-    const bestScore = best
-      ? best.meanReprojErr + (best.plausibility || 0)
-      : Infinity;
-    if (!best || score < bestScore) {
-      best = cam;
-      best.solvedHeight = h;
-    }
+    cam.solvedHeight = h;
+    return cam;
+  };
+
+  // Absolute coarse sweep over realistic sunroom/screen-room wall heights (ft),
+  // plus the config value itself so a good config is never worse off.
+  const coarse = [6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 10.5, 11, 12, 13, 14];
+  if (!coarse.includes(baseH)) coarse.push(baseH);
+  coarse.sort((a, b) => a - b);
+
+  let best = null;
+  const cache = new Map();
+  const evalH = (h) => {
+    const key = h.toFixed(3);
+    if (cache.has(key)) return cache.get(key);
+    const cam = solveAt(h);
+    cache.set(key, cam);
+    if (!best || score(cam) < score(best)) best = cam;
+    return cam;
+  };
+  for (const h of coarse) evalH(h);
+
+  // Golden-section refine around the coarse winner: the height axis is smooth
+  // and unimodal near the optimum, so a 1-D search kills the grid granularity
+  // (the old sweep left ~3px of top error just from 0.5ft steps).
+  const idx = coarse.indexOf(best.solvedHeight);
+  let lo = coarse[Math.max(0, idx - 1)];
+  let hi = coarse[Math.min(coarse.length - 1, idx + 1)];
+  const gr = (Math.sqrt(5) - 1) / 2;
+  let c = hi - gr * (hi - lo);
+  let d = lo + gr * (hi - lo);
+  let fc = score(evalH(c));
+  let fd = score(evalH(d));
+  for (let i = 0; i < 8 && hi - lo > 0.05; i++) {
+    if (fc < fd) { hi = d; d = c; fd = fc; c = hi - gr * (hi - lo); fc = score(evalH(c)); }
+    else { lo = c; c = d; fc = fd; d = lo + gr * (hi - lo); fd = score(evalH(d)); }
   }
+
   console.log(
     `[pnp] auto-height: ${best.solvedHeight.toFixed(2)}ft ` +
       `(config ${baseH.toFixed(2)}ft) reproj=${best.meanReprojErr.toFixed(1)}px ` +
@@ -692,6 +723,111 @@ function solveCameraAutoFit(pts, dims, photoW, photoH) {
   return base;
 }
 
+// ─── Single flat wall (1-wall "nook fill") ────────────────────────────────────
+// A 1-wall room fills a rectangular opening: 4 coplanar corners, NO side wall
+// and NO depth. Because the drawn wall is COPLANAR with the 4 fit points, any
+// pose that reprojects the corners onto the clicks lands the wall exactly on the
+// opening — the planar focal-length ambiguity that plagues general PnP is
+// harmless here (zero depth = nothing behind the plane to warp). Image order
+// matches camera.tsx's 1-wall capture: top-left, top-right, bottom-right,
+// bottom-left. World frame: wall in the z=0 plane, facing +Z (toward camera).
+function solveCameraFlat(pts, dims, photoW, photoH) {
+  const W = dims.wallW_C,
+    H = dims.wallH;
+  const worldPts = [
+    [0, H, 0], // top-left
+    [W, H, 0], // top-right
+    [W, 0, 0], // bottom-right
+    [0, 0, 0], // bottom-left
+  ];
+  const imagePts = pts.slice(0, 4).map(([nx, ny]) => [nx * photoW, ny * photoH]);
+  const aspect = photoW / photoH;
+  const center = [W / 2, H / 2, 0];
+  // ALL FOUR corners are exact opening corners, so weight them EQUALLY — unlike
+  // the L-shape solve, which down-weights the two top markers (imprecise
+  // house-plane clicks the roof overhang hides). Down-weighting the tops here
+  // let the height solve overshoot: the wall — and its screen panes — shot up
+  // past the clicked opening into the sky (user report). Equal weights pin the
+  // top corners, so the wall fills exactly the clicked quad.
+  const weights = [1, 1, 1, 1];
+
+  const span = Math.max(W, H);
+  const eyes = [];
+  for (const dz of [0.8 * span, 1.5 * span]) {
+    for (const dx of [-W, 0, W]) {
+      for (const hy of [0.5 * H, 0.9 * H, 1.4 * H]) {
+        eyes.push([center[0] + dx, hy, center[2] + dz]);
+      }
+    }
+  }
+  const fovCandidates = [40, 50, 60, 70];
+
+  let best = null;
+  for (const fovY of fovCandidates) {
+    for (const eye of eyes) {
+      const Rc = lookAtRc(eye, center);
+      const init = [...eye, ...rmatToRodrigues(Rc)];
+      const sol = lmSolve(init, fovY, worldPts, imagePts, aspect, photoW, photoH, 60, weights);
+      sol.penalty = plausibilityPenalty(sol, H);
+      if (!best || better(sol, best)) best = sol;
+    }
+  }
+  const polished = lmSolve(
+    [...best.params.slice(0, 6), best.fovY],
+    best.fovY, worldPts, imagePts, aspect, photoW, photoH, 120, weights,
+  );
+  polished.penalty = plausibilityPenalty(polished, H);
+  if (better(polished, best)) best = polished;
+
+  const eye = best.eye,
+    Rc = best.Rc;
+  const back = [Rc[0][2], Rc[1][2], Rc[2][2]];
+  const up = [Rc[0][1], Rc[1][1], Rc[2][1]];
+  const target = sub3(eye, back);
+  console.log(
+    `[pnp] flat wall solved: fovY=${best.fovY.toFixed(1)}° ` +
+      `err=${best.meanErr.toFixed(1)}px cheirality=${best.front ? "ok" : "FAIL"}`,
+  );
+  return {
+    fovY: best.fovY,
+    aspect,
+    position: { x: eye[0], y: eye[1], z: eye[2] },
+    target: { x: target[0], y: target[1], z: target[2] },
+    up: { x: up[0], y: up[1], z: up[2] },
+    near: 0.1,
+    far: 500,
+    worldPts,
+    imagePts,
+    photoW,
+    photoH,
+    meanReprojErr: best.meanErr,
+    groundReprojErr: best.groundErr,
+    plausibility: best.penalty || 0,
+    cheirality: best.front,
+  };
+}
+
+// Sweep an absolute wall-height range (same idea as solveCameraAutoHeight): the
+// clicked quad's aspect, not the typed height, decides where the top corners
+// land, so pick the height whose W×H rectangle best fits the opening.
+function solveCameraFlatAutoHeight(pts, dims, photoW, photoH) {
+  const score = (c) => c.meanReprojErr + (c.plausibility || 0);
+  const baseH = dims.wallH || 8;
+  const heights = [6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 10.5, 11, 12, 13, 14];
+  if (!heights.includes(baseH)) heights.push(baseH);
+  let best = null;
+  for (const h of heights) {
+    const cam = solveCameraFlat(pts, Object.assign({}, dims, { wallH: h }), photoW, photoH);
+    cam.solvedHeight = h;
+    if (!best || score(cam) < score(best)) best = cam;
+  }
+  console.log(
+    `[pnp] flat auto-height: ${best.solvedHeight.toFixed(2)}ft ` +
+      `reproj=${best.meanReprojErr.toFixed(1)}px`,
+  );
+  return best;
+}
+
 function reprojectionError(camera) {
   const eye = [camera.position.x, camera.position.y, camera.position.z];
   const center = [camera.target.x, camera.target.y, camera.target.z];
@@ -728,6 +864,7 @@ module.exports = {
   solveCamera,
   solveCameraAutoHeight,
   solveCameraAutoFit,
+  solveCameraFlatAutoHeight,
   reprojectionError,
   projectPoint,
 };

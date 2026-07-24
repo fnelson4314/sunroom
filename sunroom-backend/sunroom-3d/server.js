@@ -37,6 +37,7 @@ const fs = require("fs");
 const {
   solveCameraAutoHeight,
   solveCameraAutoFit,
+  solveCameraFlatAutoHeight,
   reprojectionError,
 } = require("./pnp");
 
@@ -85,14 +86,26 @@ function parseConfig(body) {
     return v > 0 && v <= 30 ? v * 12 : v;
   }
 
+  // EXACT inches, no unit guessing. The app now sends widthIn/heightIn (the raw
+  // entered inches) alongside the CEILED widthFt/heightFt it uses for pricing and
+  // the prompt text. Geometry must use the exact value: ceiled feet inflate the
+  // drawn box (and the PnP solve box) by up to 11" per dimension.
+  // NOTE: do NOT route these through toInches() — its "<=30 means feet" heuristic
+  // would turn a genuine 24-inch wall into 288 inches.
+  function exactInches(val) {
+    const v = parseFloat(val);
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  }
+
   let rawWalls = [];
   try {
     rawWalls = JSON.parse(wallData);
   } catch {}
 
   const walls = rawWalls.map((rw) => {
-    const widthIn = toInches(rw.widthFt ?? rw.widthIn ?? "0");
-    const heightIn = toInches(rw.heightFt ?? rw.heightIn ?? "0");
+    // Prefer exact inches; fall back to the ceiled feet for older payloads.
+    const widthIn = exactInches(rw.widthIn) || toInches(rw.widthFt ?? "0");
+    const heightIn = exactInches(rw.heightIn) || toInches(rw.heightFt ?? "0");
     const panelTypes = rw.panelTypes ?? ["fixed_glass"];
     const unitMaterials = rw.unitMaterials ?? [];
     const unitWidthsRaw = rw.unitWidths ?? [];
@@ -131,6 +144,9 @@ function parseConfig(body) {
       split_transom: rw.splitTransom ?? false,
       split_kneewall: rw.splitKneewall ?? false,
       gable_glass: rw.gableGlass ?? null,
+      // Screen rooms: inches of transom eaten off the TOP of this wall and drawn
+      // as the flat base of its gable/wing shape (0 = plain triangle).
+      gable_flat_in: parseFloat(rw.gableFlatIn) || 0,
     };
   });
   // Log the received combo verbatim — "MISSING" means the app didn't send it
@@ -284,12 +300,28 @@ async function render3D(body) {
   // combo is missing on an ambiguous 3-wall payload this auto-detects it from
   // the capture geometry; camera height is auto-fitted so the structure seats
   // on the patio either way.
-  const { combo, dims, camParams } = resolvePose(spec, body.wallCombo, pts, photoW, photoH);
+  //
+  // Single flat wall (1-wall "nook fill"): a 4-point flat capture with no side
+  // wall and no combo. Solve a planar pose against wall B and draw only that
+  // wall facing the camera — no footprint auto-fit (there's no depth to fit).
+  let combo, dims, camParams;
+  if (body.singleWall) {
+    const bWall = spec.walls.find((w) => w.wall_id === "B") || spec.walls[0];
+    dims = {
+      wallW_C: (bWall?.width_in || 120) / 12,
+      wallW_B: 0,
+      wallH: (bWall?.height_in || 96) / 12,
+    };
+    camParams = solveCameraFlatAutoHeight(pts, dims, photoW, photoH);
+    combo = "B";
+  } else {
+    ({ combo, dims, camParams } = resolvePose(spec, body.wallCombo, pts, photoW, photoH));
+  }
 
   // Footprint auto-fit: if the solve adopted photo-implied wall widths, the
   // DRAWN walls must use them too (scene.html reads the spec widths). Pricing
-  // is untouched — this only affects the render.
-  if (camParams.fittedDims) {
+  // is untouched — this only affects the render. (Single-wall never auto-fits.)
+  if (!body.singleWall && camParams.fittedDims) {
     const sideWall = combo === "AB"
       ? spec.walls.find((w) => w.wall_id === "A") || spec.walls[0]
       : spec.walls.find((w) => w.wall_id === "B") || spec.walls[0];
@@ -354,8 +386,11 @@ async function render3D(body) {
     includeGableWings: body.includeGableWings !== false,
     // Which two walls to draw (AB → A+B, BC → B+C) — the RESOLVED combo (explicit,
     // implied, or geometrically auto-detected), so scene.html always matches the
-    // camera solve above.
+    // camera solve above. "B" = single flat wall (see singleWall).
     wallCombo: combo,
+    // Single flat wall (1-wall "nook fill"): scene.html draws only wall B in the
+    // z=0 plane facing the camera — no side wall, no roof, no gable.
+    singleWall: body.singleWall === true,
     // Screen rooms (2_inch): structure-wide kneewall / chairrail / handrail.
     // These span whole walls rather than individual units, so they arrive
     // alongside wallData rather than inside it. Null for every other line.
@@ -366,6 +401,10 @@ async function render3D(body) {
     // True when the walls are insect screen rather than glass. Drives the panel
     // material: matte dark mesh, no sky sheen, no clearcoat.
     isScreenRoom: spec.wallSystem === "2_inch",
+    // Which AI repaint consumes this composite. "kontext" (image editing) wants
+    // photoreal glass with visible sky reflections — the model anchors to input
+    // pixels. Canny wants the legacy low-reflection glass (frame edge contrast).
+    repaintMode: typeof body.repaintMode === "string" ? body.repaintMode : null,
   };
 
   // A nonzero dropFt is the ONLY thing that shifts the structure vertically in
@@ -384,6 +423,13 @@ async function render3D(body) {
   const page = await b.newPage();
 
   try {
+    // Never serve a cached scene.html. The browser instance is reused across
+    // renders (getBrowser), so a cached file:// resource could keep serving an
+    // OLD scene.html after edits — the edits then silently never reach the
+    // composite even though the file on disk changed. Force a fresh read every
+    // render so scene.html edits ALWAYS take effect without a renderer restart.
+    await page.setCacheEnabled(false);
+
     await page.setViewport({
       width: photoW,
       height: photoH,
@@ -432,8 +478,9 @@ app.post("/render", async (req, res) => {
   try {
     const { pts, photoBase64, photoW, photoH } = req.body;
 
-    if (!pts || pts.length < 5)
-      return res.status(400).json({ error: "Need 5 pts" });
+    // 5+ points for the L-shaped 2-wall capture; a single flat wall sends 4.
+    if (!pts || pts.length < (req.body.singleWall ? 4 : 5))
+      return res.status(400).json({ error: req.body.singleWall ? "Need 4 pts" : "Need 5 pts" });
     if (!photoBase64)
       return res.status(400).json({ error: "Need photoBase64" });
     if (!photoW || !photoH)

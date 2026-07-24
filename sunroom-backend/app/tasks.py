@@ -1,10 +1,11 @@
 from app.worker import celery_app
 from app.database import supabase
-from app.prompt_builder import build_prompt
+from app.prompt_builder import build_prompt, build_kontext_instruction
 from app.replicate_service import (
     prepare_and_mask,
     run_flux_fill_lora,
     run_flux_control_dev,
+    run_flux_kontext,
     build_silhouette_mask,
     prepare_render_mask,
     composite_masked,
@@ -36,7 +37,6 @@ RENDERER_3D_URL = os.environ.get("RENDERER_3D_URL", "http://localhost:3001")
 #   "controlnet" → flux-canny-dev: regenerates the WHOLE frame from edges. Does
 #                  NOT preserve the photo and reinvents the config — kept only
 #                  for experimentation, not default.
-#   "ground"     → legacy: blend the ground-contact shadow only.
 FLUX_REPAINT_MODE = os.environ.get("FLUX_REPAINT_MODE", "full")
 # Inpaint denoise strength. The exact mask confines changes to the sunroom, so
 # this can run fairly high safely. Too low (~0.4) leaves a faint ghost; ~0.7 is
@@ -172,8 +172,17 @@ def generate_sunroom(
                 logger.warning(f"[{session_id}] Could not parse wall_corners")
 
         pts = None
+        single_wall = False
         if parsed_corners and "_5pt" in parsed_corners:
             pts = parsed_corners["_5pt"]
+        elif parsed_corners:
+            # 1-wall "nook fill": the camera stores the 4 opening corners under
+            # "B" (no _5pt). Flat single-wall capture — the renderer solves a
+            # planar pose and draws only wall B facing the camera.
+            b = parsed_corners.get("B")
+            if isinstance(b, list) and len(b) == 4:
+                pts = b
+                single_wall = True
 
         # Under-existing: the traced existing-roof underside polyline. The renderer
         # clips the walls to it and draws a header beam instead of a new roof.
@@ -181,194 +190,133 @@ def generate_sunroom(
         if parsed_corners and isinstance(parsed_corners.get("_roofline"), list):
             roofline = parsed_corners["_roofline"]
 
-        # ── Step 5: 3D render via Node.js service ─────────────────────────────
-        use_3d_composite = pts is not None
+        # -- Step 5: 3D render via Node.js service --------------------------------
+        # The 3D composite is the ONLY supported render path. No 5-point capture,
+        # or a renderer failure, is a hard error -- we fail loudly instead of falling
+        # back to a geometrically-wrong render. (The old Python fallback had no wall-
+        # combo logic and silently produced misaligned structures.)
+        if pts is None:
+            raise Exception(
+                "No 5-point capture in wall_corners -- cannot render without "
+                "perspective markers"
+            )
+
         render_mask_bytes = None  # exact structure mask from the renderer, if any
+        logger.info(f"[{session_id}] Calling 3D renderer service at {RENDERER_3D_URL}")
+        try:
+            photo_b64 = base64.b64encode(photo_bytes).decode()
+            render_payload = {
+                "photoBase64":       photo_b64,
+                "photoW":            photo_w,
+                "photoH":            photo_h,
+                "pts":               pts,
+                "wallData":          wall_data,
+                "wallSystem":        wall_system,
+                "wallColor":         wall_color,
+                "roofStyle":         roof_style,
+                "mountHeight":       mount_height,
+                "projectionDistance": projection_distance,
+                "dropFt":            STRUCTURE_DROP_FT,
+                "roofline":          roofline,
+                "includeGableWings": include_gable_wings,
+                "wallCombo":         wall_combo,
+                "singleWall":        single_wall,
+                "screenOptions":     parsed_screen_options,
+                "repaintMode":       FLUX_REPAINT_MODE,
+            }
 
-        if use_3d_composite:
-            logger.info(f"[{session_id}] Calling 3D renderer service at {RENDERER_3D_URL}")
-            try:
-                photo_b64 = base64.b64encode(photo_bytes).decode()
-                render_payload = {
-                    "photoBase64":       photo_b64,
-                    "photoW":            photo_w,
-                    "photoH":            photo_h,
-                    "pts":               pts,
-                    "wallData":          wall_data,
-                    "wallSystem":        wall_system,
-                    "wallColor":         wall_color,
-                    "roofStyle":         roof_style,
-                    "mountHeight":       mount_height,
-                    "projectionDistance": projection_distance,
-                    "dropFt":            STRUCTURE_DROP_FT,
-                    "roofline":          roofline,
-                    "includeGableWings": include_gable_wings,
-                    "wallCombo":         wall_combo,
-                    "screenOptions":     parsed_screen_options,
-                }
-
-                with httpx.Client(timeout=90) as client:
-                    resp = client.post(
-                        f"{RENDERER_3D_URL}/render",
-                        json=render_payload,
-                        headers={"Content-Type": "application/json"},
-                    )
-                    resp.raise_for_status()
-                    render_data = resp.json()
-
-                # Renderer now returns the composite AND an exact structure mask
-                # (white sunroom on black) — pixel-perfect, immune to the
-                # tone-mapping that made diff-based masks flag the whole frame.
-                composite_bytes = base64.b64decode(render_data["composite"])
-                _render_mask_b64 = render_data.get("mask")
-                render_mask_bytes = (
-                    base64.b64decode(_render_mask_b64) if _render_mask_b64 else None
+            with httpx.Client(timeout=90) as client:
+                resp = client.post(
+                    f"{RENDERER_3D_URL}/render",
+                    json=render_payload,
+                    headers={"Content-Type": "application/json"},
                 )
+                resp.raise_for_status()
+                render_data = resp.json()
 
+            # Renderer returns the composite AND an exact structure mask (white
+            # sunroom on black) -- pixel-perfect, immune to the tone-mapping that
+            # made diff-based masks flag the whole frame.
+            composite_bytes = base64.b64decode(render_data["composite"])
+            _render_mask_b64 = render_data.get("mask")
+            render_mask_bytes = (
+                base64.b64decode(_render_mask_b64) if _render_mask_b64 else None
+            )
+
+            logger.info(
+                f"[{session_id}] 3D render succeeded "
+                f"(composite {len(composite_bytes)}b, "
+                f"mask {'yes' if render_mask_bytes else 'none'})"
+            )
+
+            # SINGLE SOURCE OF TRUTH for the wall combo: the renderer returns the
+            # combo it ACTUALLY drew (explicit, inferred, or geometric auto-detect).
+            # If the prompt was built assuming a different pair, rebuild it -- a prompt
+            # describing one wall layout over a composite showing the other makes FLUX
+            # repaint a scrambled panel patchwork.
+            resolved_combo = render_data.get("combo")
+            if resolved_combo in ("AB", "BC") and resolved_combo != wall_combo:
                 logger.info(
-                    f"[{session_id}] 3D render succeeded "
-                    f"(composite {len(composite_bytes)}b, "
-                    f"mask {'yes' if render_mask_bytes else 'none'})"
+                    f"[{session_id}] renderer resolved wall combo "
+                    f"{resolved_combo} (request had {wall_combo!r}) -- rebuilding prompt"
+                )
+                positive_prompt, negative_prompt = build_prompt(
+                    selected_option_ids,
+                    wall_data=wall_data,
+                    roof_style=roof_style,
+                    wall_system=wall_system,
+                    wall_color=wall_color,
+                    under_existing_shape=under_existing_shape,
+                    include_gable_wings=include_gable_wings,
+                    wall_combo=resolved_combo,
+                    screen_options=parsed_screen_options,
                 )
 
-                # SINGLE SOURCE OF TRUTH for the wall combo: the renderer returns
-                # the combo it ACTUALLY drew (explicit, inferred, or geometric
-                # auto-detect). If the prompt was built assuming a different pair,
-                # rebuild it — a prompt describing one wall layout over a composite
-                # showing the other makes FLUX repaint a scrambled panel patchwork.
-                resolved_combo = render_data.get("combo")
-                if resolved_combo in ("AB", "BC") and resolved_combo != wall_combo:
-                    logger.info(
-                        f"[{session_id}] renderer resolved wall combo "
-                        f"{resolved_combo} (request had {wall_combo!r}) — rebuilding prompt"
-                    )
-                    positive_prompt, negative_prompt = build_prompt(
-                        selected_option_ids,
-                        wall_data=wall_data,
-                        roof_style=roof_style,
-                        wall_system=wall_system,
-                        wall_color=wall_color,
-                        under_existing_shape=under_existing_shape,
-                        include_gable_wings=include_gable_wings,
-                        wall_combo=resolved_combo,
-                        screen_options=parsed_screen_options,
-                    )
+            # Upload debug composite + mask
+            debug_url = upload_bytes(composite_bytes, "jpg", "debug-composites")
+            logger.info(f"[{session_id}] DEBUG 3D composite: {debug_url}")
+            if render_mask_bytes:
+                dbg_mask = upload_bytes(render_mask_bytes, "png", "debug-composites")
+                logger.info(f"[{session_id}] DEBUG structure mask: {dbg_mask}")
 
-                # Upload debug composite + mask
-                debug_url = upload_bytes(composite_bytes, "jpg", "debug-composites")
-                logger.info(f"[{session_id}] DEBUG 3D composite: {debug_url}")
-                if render_mask_bytes:
-                    dbg_mask = upload_bytes(render_mask_bytes, "png", "debug-composites")
-                    logger.info(f"[{session_id}] DEBUG structure mask: {dbg_mask}")
-
-                use_composite = True
-
-            except Exception as render_err:
-                logger.warning(f"[{session_id}] 3D renderer failed ({render_err}) — falling back to Python renderer")
-                use_composite = False
-        else:
-            logger.info(f"[{session_id}] No 5pt corners — using Python renderer fallback")
-            use_composite = False
-
-        # ── Step 5b: Python renderer fallback ────────────────────────────────
-        if not use_composite:
-            try:
-                from app.sunroom_renderer import render_sunroom
-                config_dict = {
-                    "wallSystem":         wall_system,
-                    "wallColor":          wall_color,
-                    "roofStyle":          roof_style,
-                    "mountHeight":        mount_height,
-                    "wallData":           wall_data,
-                    "projectionDistance": projection_distance,
-                    "roofOnlySubStyle":   roof_only_sub_style,
-                }
-
-                effective_x1, effective_y1 = box_x1, box_y1
-                effective_x2, effective_y2 = box_x2, box_y2
-
-                if parsed_corners and "_5pt" in parsed_corners:
-                    house_pts = parsed_corners["_5pt"][:4]
-                    xs = [p[0] for p in house_pts]
-                    ys = [p[1] for p in house_pts]
-                    effective_x1, effective_y1 = min(xs), min(ys)
-                    effective_x2, effective_y2 = max(xs), max(ys)
-
-                composite_bytes, edge_mask_bytes = render_sunroom(
-                    photo_bytes, config_dict,
-                    effective_x1, effective_y1,
-                    effective_x2, effective_y2,
-                    wall_corners=parsed_corners,
-                )
-                debug_url = upload_bytes(composite_bytes, "jpg", "debug-composites")
-                logger.info(f"[{session_id}] DEBUG Python composite: {debug_url}")
-                use_composite = True
-            except Exception as py_err:
-                logger.warning(f"[{session_id}] Python renderer also failed ({py_err}) — using raw photo")
-                use_composite = False
+        except Exception as render_err:
+            raise Exception(f"3D renderer failed: {render_err}") from render_err
 
         if is_cancelled():
             return {"status": "cancelled"}
 
-        # ── Step 6: Build the FLUX mask ──────────────────────────────────────
-        # "controlnet"/"full": mask the ENTIRE rendered sunroom silhouette so the
-        #   model repaints the whole structure photoreal (controlnet also locks
-        #   geometry via the composite's edges).
-        # "ground": legacy — mask only the ground-contact strip so FLUX just
-        #   blends the shadow and leaves the raw 3D render visible.
-        repaint_strength = 1.0
-        silhouette_mask_bytes = None  # kept for the post-repaint composite step
-        if use_composite:
-            inpaint_image_url = upload_bytes(composite_bytes, "jpg", "house-photos")
+        # -- Step 6: Build the FLUX mask ------------------------------------------
+        # Mask the ENTIRE rendered sunroom silhouette so the model repaints the whole
+        # structure photoreal (controlnet also locks geometry via the composite's
+        # edges). Prefer the renderer's EXACT structure mask; fall back to the diff-
+        # based silhouette only if the renderer didn't supply one.
+        inpaint_image_url = upload_bytes(composite_bytes, "jpg", "house-photos")
 
-            if FLUX_REPAINT_MODE in ("full", "controlnet"):
-                # Prefer the renderer's EXACT structure mask. Only fall back to
-                # the diff-based silhouette if the renderer didn't supply one.
-                if render_mask_bytes:
-                    mask_bytes, coverage = prepare_render_mask(render_mask_bytes)
-                    logger.info(f"[{session_id}] Using exact renderer mask, coverage {coverage:.1%}")
-                else:
-                    mask_bytes, coverage = build_silhouette_mask(composite_bytes, photo_bytes)
-                    logger.info(f"[{session_id}] Diff silhouette mask, coverage {coverage:.1%}")
-
-                if coverage < 0.01 or coverage > 0.85:
-                    # Implausible mask (near-empty, or ballooned to ~whole frame)
-                    # — fall back to the structure bounding box rather than wreck
-                    # the photo.
-                    logger.warning(
-                        f"[{session_id}] Mask coverage {coverage:.1%} implausible — "
-                        f"falling back to bounding-box mask"
-                    )
-                    _, mask_url = prepare_and_mask(
-                        house_photo_url, box_x1, box_y1, box_x2, box_y2
-                    )
-                    # we don't have bytes for the bbox mask here; Step 8 downloads it
-                else:
-                    mask_url = upload_bytes(mask_bytes, "png", "masks")
-                    silhouette_mask_bytes = mask_bytes
-
-                repaint_strength = FLUX_REPAINT_STRENGTH
-                logger.info(f"[{session_id}] DEBUG repaint mask: {mask_url}")
-
-            else:  # "ground" — legacy shadow-only blend
-                logger.info(f"[{session_id}] Generating ground-contact mask (legacy blend)")
-                if pts:
-                    mask_bytes = _build_ground_contact_mask(
-                        pts, photo_w, photo_h, ground_fraction=0.15, feather_px=28
-                    )
-                    mask_url = upload_bytes(mask_bytes, "png", "masks")
-                else:
-                    _, mask_url = prepare_and_mask(
-                        house_photo_url, box_x1, box_y1, box_x2, box_y2
-                    )
-                repaint_strength = 1.0
+        if render_mask_bytes:
+            mask_bytes, coverage = prepare_render_mask(render_mask_bytes)
+            logger.info(f"[{session_id}] Using exact renderer mask, coverage {coverage:.1%}")
         else:
-            # No composite — inpaint the box region of the raw photo from scratch.
-            inpaint_image_url = resized_image_url
+            mask_bytes, coverage = build_silhouette_mask(composite_bytes, photo_bytes)
+            logger.info(f"[{session_id}] Diff silhouette mask, coverage {coverage:.1%}")
+
+        silhouette_mask_bytes = None  # kept for the post-repaint composite step
+        if coverage < 0.01 or coverage > 0.85:
+            # Implausible mask (near-empty, or ballooned to ~whole frame) -- fall back
+            # to the structure bounding box rather than wreck the photo.
+            logger.warning(
+                f"[{session_id}] Mask coverage {coverage:.1%} implausible -- "
+                f"falling back to bounding-box mask"
+            )
             _, mask_url = prepare_and_mask(
                 house_photo_url, box_x1, box_y1, box_x2, box_y2
             )
-            repaint_strength = 1.0
+            # we don't have bytes for the bbox mask here; Step 8 downloads it
+        else:
+            mask_url = upload_bytes(mask_bytes, "png", "masks")
+            silhouette_mask_bytes = mask_bytes
+
+        repaint_strength = FLUX_REPAINT_STRENGTH
+        logger.info(f"[{session_id}] DEBUG repaint mask: {mask_url}")
 
         if is_cancelled():
             return {"status": "cancelled"}
@@ -383,7 +331,18 @@ def generate_sunroom(
         # sunroom from the ORIGINAL photo, so the house/pool/sky stay pixel-
         # identical and any stray text artifacts are discarded. For controlnet
         # mode this is required (the model renoises the whole frame).
-        needs_composite = use_composite and FLUX_REPAINT_MODE in ("full", "controlnet")
+        needs_composite = FLUX_REPAINT_MODE in ("full", "controlnet", "kontext")
+
+        # Kontext mode: instruction-based image EDIT of the composite. Short
+        # instruction — the composite image itself carries the config.
+        kontext_instruction = None
+        if FLUX_REPAINT_MODE == "kontext":
+            kontext_instruction = build_kontext_instruction(
+                wall_system=wall_system,
+                wall_color=wall_color,
+                roof_style=roof_style,
+            )
+            logger.info(f"[{session_id}] Kontext instruction: {kontext_instruction}")
 
         # Pre-fetch the composite mask ONCE (not per variation) when we'll need it.
         composite_mask_bytes = silhouette_mask_bytes
@@ -398,7 +357,13 @@ def generate_sunroom(
             """One photoreal variation: AI repaint (Step 7) + background restore
             (Step 8). Returns the final render URL. Raises on failure so the
             caller can skip just this variation."""
-            if use_composite and FLUX_REPAINT_MODE == "controlnet":
+            if FLUX_REPAINT_MODE == "kontext":
+                out_url = run_flux_kontext(
+                    input_image_url=inpaint_image_url,
+                    instruction=kontext_instruction,
+                    seed=seed,
+                )
+            elif FLUX_REPAINT_MODE == "controlnet":
                 out_url = run_flux_control_dev(
                     control_image_url=inpaint_image_url,
                     prompt=positive_prompt,
@@ -551,52 +516,3 @@ def generate_sunroom(
             .eq("id", session_id)\
             .execute()
         raise self.retry(exc=e, countdown=10)
-
-
-def _build_ground_contact_mask(
-    pts: list,
-    photo_w: int,
-    photo_h: int,
-    ground_fraction: float = 0.15,
-    feather_px: int = 28,
-) -> bytes:
-    """
-    Build a mask that covers only the ground contact zone of the sunroom:
-    the bottom `ground_fraction` of the structure bounding box, feathered.
-
-    This tells FLUX to only blend the shadow/contact line where the
-    sunroom meets the patio — not the roof, walls, or glass.
-    """
-    from PIL import Image, ImageFilter
-    import numpy as np
-
-    # Ground points: pt3 (left bottom), pt4 (front corner), pt2 (right bottom)
-    ground_pts = [pts[2], pts[3], pts[4]]  # right-bottom, left-bottom, front-corner
-
-    xs = [p[0] * photo_w for p in ground_pts]
-    ys = [p[1] * photo_h for p in ground_pts]
-
-    # Bounding box of ground zone
-    min_x = int(min(xs)) - feather_px
-    max_x = int(max(xs)) + feather_px
-    ground_y = int(max(ys))             # lowest point in photo coords
-
-    # Structure top
-    top_ys  = [pts[0][1] * photo_h, pts[1][1] * photo_h]
-    struct_top_y = int(min(top_ys))
-    struct_h     = ground_y - struct_top_y
-
-    # Mask covers bottom ground_fraction of structure height
-    mask_top_y = max(struct_top_y, ground_y - int(struct_h * ground_fraction))
-
-    mask = Image.new("L", (photo_w, photo_h), 0)
-    from PIL import ImageDraw
-    ImageDraw.Draw(mask).rectangle(
-        [max(0, min_x), mask_top_y, min(photo_w, max_x), min(photo_h, ground_y + feather_px)],
-        fill=255,
-    )
-    mask = mask.filter(ImageFilter.GaussianBlur(radius=feather_px))
-
-    buf = io.BytesIO()
-    mask.save(buf, format="PNG")
-    return buf.getvalue()

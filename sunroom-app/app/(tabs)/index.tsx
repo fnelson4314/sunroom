@@ -1,3 +1,6 @@
+import Card from "@/components/ui/Card";
+import ConfirmModal from "@/components/ui/ConfirmModal";
+import StatusBadge from "@/components/ui/StatusBadge";
 import { Colors } from "@/constants/Colors";
 import { FontSize } from "@/constants/Typography";
 import { deleteSession, getSessionsBySalesperson } from "@/services/api";
@@ -26,24 +29,6 @@ type Session = {
   depth_ft: number | null;
   created_at: string;
   render_url: string | null;
-};
-
-const statusColors: Record<string, string> = {
-  complete: Colors.status.complete,
-  failed: Colors.status.failed,
-  generating: Colors.status.generating,
-  queued: Colors.status.generating,
-  draft: Colors.status.draft,
-  saved_draft: Colors.primary,
-};
-
-const statusLabels: Record<string, string> = {
-  complete: "Complete",
-  failed: "Failed",
-  generating: "Generating",
-  queued: "Queued",
-  draft: "Draft",
-  saved_draft: "Saved Draft",
 };
 
 export default function HomeScreen() {
@@ -119,13 +104,7 @@ export default function HomeScreen() {
       : item.customer_name || "Unnamed Customer";
 
     return (
-      <View
-        style={[
-          styles.card,
-          isDeleting && styles.cardDeleting,
-          isSavedDraft && styles.cardDraft,
-        ]}
-      >
+      <Card active={isSavedDraft} style={isDeleting && styles.cardDeleting}>
         <Pressable
           onPress={() => {
             if (isDeleting) return;
@@ -156,27 +135,7 @@ export default function HomeScreen() {
               )}
             </View>
             <View style={styles.cardRight}>
-              <View
-                style={[
-                  styles.statusBadge,
-                  {
-                    backgroundColor:
-                      (statusColors[item.status] ?? Colors.text.tertiary) +
-                      "20",
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.statusText,
-                    {
-                      color: statusColors[item.status] ?? Colors.text.tertiary,
-                    },
-                  ]}
-                >
-                  {statusLabels[item.status] ?? item.status}
-                </Text>
-              </View>
+              <StatusBadge status={item.status} />
               {item.total_price ? (
                 <Text style={styles.price}>
                   ${item.total_price.toLocaleString()}
@@ -218,7 +177,7 @@ export default function HomeScreen() {
             )}
           </View>
         </View>
-      </View>
+      </Card>
     );
   };
 
@@ -275,37 +234,25 @@ export default function HomeScreen() {
         </Pressable>
       </View>
 
-      {/* Delete confirmation modal */}
-      {pendingDeleteItem && (
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Delete Session</Text>
-            <Text style={styles.modalBody}>
-              Delete{" "}
-              <Text style={{ fontWeight: "600" }}>
-                {pendingDeleteItem.session_name ||
-                  pendingDeleteItem.customer_name ||
-                  "this session"}
-              </Text>
-              ? This cannot be undone.
+      <ConfirmModal
+        visible={!!pendingDeleteItem}
+        title="Delete Session"
+        body={
+          <Text style={styles.modalBody}>
+            Delete{" "}
+            <Text style={{ fontWeight: "600" }}>
+              {pendingDeleteItem?.session_name ||
+                pendingDeleteItem?.customer_name ||
+                "this session"}
             </Text>
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={styles.modalCancel}
-                onPress={() => setPendingDeleteItem(null)}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.modalDelete}
-                onPress={confirmDelete}
-              >
-                <Text style={styles.modalDeleteText}>Delete</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      )}
+            ? This cannot be undone.
+          </Text>
+        }
+        confirmLabel="Delete"
+        destructive
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDeleteItem(null)}
+      />
     </View>
   );
 }
@@ -320,19 +267,7 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   list: { padding: 16, gap: 12, flexGrow: 1 },
-  card: {
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 0.5,
-    borderColor: Colors.border,
-    gap: 8,
-  },
   cardDeleting: { opacity: 0.5 },
-  cardDraft: {
-    borderColor: Colors.primary,
-    borderWidth: 1.5,
-  },
   cardTop: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -349,8 +284,6 @@ const styles = StyleSheet.create({
   customerName: { fontSize: FontSize.label, fontWeight: "600", color: Colors.text.primary },
   productName: { fontSize: FontSize.body, color: Colors.text.secondary },
   dimensions: { fontSize: FontSize.body, color: Colors.text.tertiary },
-  statusBadge: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 20 },
-  statusText: { fontSize: FontSize.body, fontWeight: "600" },
   price: { fontSize: FontSize.label, fontWeight: "700", color: Colors.status.complete },
   date: { fontSize: FontSize.body, color: Colors.text.tertiary },
   continueButton: {
@@ -414,57 +347,5 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   retryText: { color: Colors.white, fontSize: FontSize.label, fontWeight: "600" },
-  modalOverlay: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 100,
-  },
-  modalCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: 16,
-    padding: 24,
-    width: 320,
-    gap: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-  },
-  modalTitle: { fontSize: FontSize.subhead, fontWeight: "700", color: Colors.text.primary },
   modalBody: { fontSize: FontSize.callout, color: Colors.text.secondary, lineHeight: 22 },
-  modalButtons: { flexDirection: "row", gap: 10, marginTop: 8 },
-  modalCancel: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 10,
-    alignItems: "center",
-    backgroundColor: Colors.background,
-    borderWidth: 0.5,
-    borderColor: Colors.border,
-  },
-  modalCancelText: {
-    fontSize: FontSize.label,
-    fontWeight: "600",
-    color: Colors.text.primary,
-  },
-  modalDelete: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 10,
-    alignItems: "center",
-    backgroundColor: Colors.status.failed + "15",
-    borderWidth: 1,
-    borderColor: Colors.status.failed + "40",
-  },
-  modalDeleteText: {
-    fontSize: FontSize.label,
-    fontWeight: "600",
-    color: Colors.status.failed,
-  },
 });

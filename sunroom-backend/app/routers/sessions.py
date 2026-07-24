@@ -23,6 +23,7 @@ class CreateSessionRequest(BaseModel):
     customer_email: Optional[str] = None
     salesperson_id: Optional[str] = None
     notes: Optional[str] = None
+    house_photo_url: Optional[str] = None
 
     class Config:
         extra = "forbid"
@@ -104,16 +105,19 @@ def update_draft(session_id: str, body: UpdateDraftRequest):
         if not updates:
             raise HTTPException(status_code=400, detail="No fields to update")
 
+        # No status filter — draft_state must stay editable after the row becomes
+        # a completed session (Tweak → change → regenerate), same reason as
+        # load_draft above. The old status="saved_draft" filter silently dropped
+        # config edits made on an already-generated design.
         result = supabase.table("configurations")\
             .update(updates)\
             .eq("id", session_id)\
-            .eq("status", "saved_draft")\
             .execute()
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Draft not found")
 
-        return {"id": session_id, "status": "saved_draft"}
+        return {"id": session_id, "status": result.data[0].get("status", "saved_draft")}
 
     except HTTPException:
         raise
@@ -127,10 +131,14 @@ def load_draft(session_id: str):
     """Load a saved draft to resume configuration."""
     validate_uuid(session_id)
     try:
+        # No status filter: a design's full config (draft_state) now lives on the
+        # SAME row that becomes the completed session (status "complete"), so
+        # "Tweak"/"Edit Configuration" must load draft_state regardless of status.
+        # Filtering to status="saved_draft" (the old behaviour) 404'd after
+        # generation and reset the configurator to step 1 with nothing restored.
         result = supabase.table("configurations")\
             .select("id, session_name, draft_state, created_at, salesperson_id")\
             .eq("id", session_id)\
-            .eq("status", "saved_draft")\
             .execute()
 
         if not result.data:
@@ -164,6 +172,7 @@ def create_session(
             "customer_email": body.customer_email,
             "salesperson_id": body.salesperson_id,
             "notes": body.notes,
+            "house_photo_url": body.house_photo_url,
             "status": "draft",
         }).execute()
         return result.data[0]

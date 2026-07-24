@@ -6,13 +6,23 @@ logger = logging.getLogger(__name__)
 
 # ─── Prompt constants ─────────────────────────────────────────────────────────
 
+def _frame_color_word(wall_color: str) -> str:
+    """AI-facing color word for the frame. The internal key stays "tan" (DB /
+    state / scene.html fcHex all use it), but the bare word "tan" reads to a
+    model as a medium-dark khaki tone — which is what the composite used to
+    render before it was lightened to a cream (user 2026-07-14, applies to
+    both product lines). Say "light cream" so the text description matches
+    the now-lighter composite pixels instead of pulling against them."""
+    color = (wall_color or "white").strip().lower()
+    return "light cream" if color == "tan" else color
+
 # Built per-render with the ACTUAL frame colour so it never conflicts with the
 # config (was hardcoded "white ... brick house"). Matches the LoRA's training
 # caption style: "SUNRM, a <colour> aluminum-framed sunroom ...". The roof,
 # house type, and "attached" wording are intentionally NOT here — the roof is
 # described once by roof_fragment, and the real house is already in the photo.
 def quality_prefix(frame_color: str, is_screen_room: bool = False) -> str:
-    color = (frame_color or "white").strip().lower()
+    color = _frame_color_word(frame_color)
     if is_screen_room:
         # A screen room has NO glass. The glass wording below is the single most
         # damaging thing you can hand FLUX over a screened-porch composite — it
@@ -23,11 +33,16 @@ def quality_prefix(frame_color: str, is_screen_room: bool = False) -> str:
             f"matte dark screen mesh that you can see through into a shaded "
             f"interior, no glass anywhere, attached to the house, "
         )
+    # Glass wording walks a line between two observed seed-failure poles:
+    # "mirror the bright blue sky / bright reflections" produced saturated milky-
+    # BLUE glass on some seeds, while nothing fought fully-opaque BLACK glass on
+    # others (2026-07-12 batch). Describe the middle: lightly tinted, softly
+    # reflective, partially see-through with the interior visible.
     return (
         f"SUNRM, photorealistic exterior photo of a {color} aluminum-framed "
-        f"sunroom with large glass walls of clear tinted reflective glass "
-        f"that mirror the bright blue sky, light and airy glass with bright sky "
-        f"reflections, attached to the house, "
+        f"sunroom with large glass walls of clear lightly tinted glass, the "
+        f"interior softly visible through the panes, gentle sky reflections on "
+        f"the glass, light and airy, attached to the house, "
     )
 
 # Affirmative realism cues only (the model ignores the negative prompt, so the
@@ -121,6 +136,34 @@ def _resolve_combo(walls: list, wall_combo: str) -> str:
     return "AB" if ("A" in ids and "C" not in ids) else "BC"
 
 
+def _panel_has_transom(panel_type_id: str) -> bool:
+    """True for every panel type that carries a transom: fixed_transom,
+    fixed_tk / oper_tk, door_t / sliding_door_t / screen_t / screen_door_t."""
+    pt = str(panel_type_id)
+    return "transom" in pt or pt.endswith(("_t", "_tk"))
+
+
+# Door panel type ids (new + legacy + screen) — used to repeat the door
+# description at the end of the wall clause so FLUX weights it properly.
+DOOR_PANEL_TYPES = {
+    "door", "door_t", "sliding_door", "sliding_door_t",
+    "screen_door", "screen_door_t",
+}
+
+# AFFIRMATIVE-ONLY door wording for the end-of-clause emphasis. Never reuse
+# DOOR_STYLE_DESCRIPTIONS here: the sliding one contains "not a hinged entry
+# door", and repeating it DOUBLED the "hinged entry door" noun — FLUX latched
+# onto the noun and painted hinged doors (2026-07-12 regression).
+DOOR_STYLE_EMPHASIS = {
+    "sliding":       "a wide sliding glass patio door with two full-height sliding glass panels and a tall dark vertical pull handle",
+    "french":        "french double doors with two glass door leaves meeting at the center",
+    "entry":         "a single hinged entry door",
+    "storm":         "a storm door",
+    "screen_door":   "a hinged full-view screen door of insect mesh with a horizontal mid rail and lever handle",
+    "screen_door_t": "a hinged full-view screen door of insect mesh with a horizontal mid rail and lever handle",
+}
+
+
 def _describe_panel(
     panel_type_id: str,
     materials: dict,
@@ -174,7 +217,8 @@ def _describe_panel(
 
 
 def _describe_gable_glass(
-    gable: dict, wall_id: str, wall_height_ft: str, is_screen: bool = False
+    gable: dict, wall_id: str, wall_height_ft: str, is_screen: bool = False,
+    has_transom: bool = False,
 ) -> str:
     if not gable:
         return ""
@@ -183,7 +227,13 @@ def _describe_gable_glass(
     count      = gable.get("count", 1)
     wall_h     = float(wall_height_ft) if wall_height_ft else 0
 
-    shape = "trapezoidal" if wall_h > 7 else "triangular"
+    # Sunrooms: units cap at door height, so extra wall height gives the gable a
+    # flat-sided (trapezoidal) base. Screen units run full height — their gable
+    # only gets flat sides when the wall's TRANSOM lives in it (2026-07-14).
+    if is_screen:
+        shape = "trapezoidal" if has_transom else "triangular"
+    else:
+        shape = "trapezoidal" if wall_h > 7 else "triangular"
 
     if is_screen:
         # The ScreenRoomBuilder calls this control "Gable Screen" / "Wing Screen".
@@ -231,6 +281,7 @@ def build_wall_description(wall_data: str, wall_combo: str = None) -> str:
     position_labels = WALL_POSITION_BY_COMBO[combo]
 
     wall_descs = []
+    door_keys = []  # door style/type keys for the end-of-clause emphasis
 
     for wall in walls:
         # Skip walls the camera can't see — they must not be painted.
@@ -275,6 +326,10 @@ def build_wall_description(wall_data: str, wall_combo: str = None) -> str:
                 pt_id, mats, split_transom, split_kneewall,
                 transom_h, kneewall_h, door_style
             ))
+            if pt_id in DOOR_PANEL_TYPES:
+                door_keys.append(
+                    pt_id if pt_id.startswith("screen_door") else door_style
+                )
 
         # Deduplicate consecutive identical units
         condensed = []
@@ -293,7 +348,8 @@ def build_wall_description(wall_data: str, wall_combo: str = None) -> str:
         if gable_glass:
             wall_is_screen = any(str(pt).startswith("screen") for pt in panel_types)
             gable_str = _describe_gable_glass(
-                gable_glass, wall_id, height_ft, wall_is_screen
+                gable_glass, wall_id, height_ft, wall_is_screen,
+                has_transom=any(_panel_has_transom(str(pt)) for pt in panel_types),
             )
 
         parts = [f"{position} (Wall {wall_id})"]
@@ -317,7 +373,76 @@ def build_wall_description(wall_data: str, wall_combo: str = None) -> str:
         for pt in w.get("panelTypes", [])
     )
     lead = "Screened porch structure: " if is_screen else "Sunroom structure: "
-    return lead + ". ".join(wall_descs) + "."
+    out = lead + ". ".join(wall_descs) + "."
+
+    # Repeat the door once at the end — the per-unit mention gets diluted by the
+    # surrounding panel list (TODO item 1). AFFIRMATIVE wording only, plus an
+    # exact count so FLUX doesn't invent extra doors.
+    if door_keys:
+        n = len(door_keys)
+        labels = [DOOR_STYLE_EMPHASIS.get(k, "a door") for k in door_keys]
+        uniq = list(dict.fromkeys(labels))
+        listing = uniq[0] if len(uniq) == 1 else "; ".join(labels)
+        count_word = "exactly one door" if n == 1 else f"exactly {n} doors"
+        out += f" The structure has {count_word}: {listing}."
+    return out
+
+
+def build_kontext_instruction(
+    wall_system: str = "",
+    wall_color: str = "white",
+    roof_style: str = "",
+) -> str:
+    """Edit instruction for FLUX Kontext (FLUX_REPAINT_MODE=kontext).
+
+    Deliberately SHORT: with an editing model the composite image itself carries
+    the config (which panels are glass/solid/screen, transoms, door position), so
+    the text only needs the transformation + material appearance + a hard "change
+    nothing else". Do not paste the long scene description here — instruction
+    adherence degrades and the config is already in the pixels.
+    """
+    color = _frame_color_word(wall_color)
+    is_screen = wall_system == "2_inch"
+    noun = "screened porch" if is_screen else "sunroom"
+
+    material_clause = (
+        "panels drawn as dark mesh become charcoal insect screen mesh you can "
+        "partly see through, with no glass anywhere"
+        if is_screen else
+        # Glass-tone wording history (2026-07-13, tuned against a real install
+        # photo — this clause oscillates, don't re-trip the same wires):
+        #   "interior faintly visible"        → bright creamy lit-room glow
+        #   "interior unlit and shaded"       → still a lit room
+        #   "stay as dark as they are drawn"  → flat DEAD-dark panes, no life
+        # What reads real: DARK glass carrying sky/yard REFLECTIONS, interior
+        # only hinted. Reflections are the non-negotiable part.
+        "panels drawn as glass become dark tinted reflective glass like real "
+        "sunroom glazing photographed in daylight: every pane carries a soft "
+        "reflection of the sky and yard, and the unlit shaded interior is only "
+        "faintly hinted behind the reflections; panels drawn as solid or white "
+        "stay solid; windows drawn with an offset sliding half-pane KEEP that "
+        "visible two-pane sliding sash split — do not merge them into one "
+        "sheet of glass; any glass door keeps full-height glass running all "
+        "the way down to the floor exactly as drawn — no kneewall and no solid "
+        "panel on the door, even when the panels beside it have one — with a "
+        "slim white vertical pull handle exactly where drawn"
+    )
+    roof_clause = (
+        "the existing house roof above it stays completely unchanged"
+        if roof_style == "under_existing" else
+        "the drawn roof becomes dark asphalt shingles with fine horizontal "
+        "courses matching the existing house roof"
+    )
+
+    return (
+        f"Turn the 3D-rendered {noun} overlay in this photo into a photorealistic "
+        f"{color} aluminum-framed {noun}, as if actually built and professionally "
+        "photographed. Keep its exact geometry: every frame, mullion, panel, "
+        "kneewall, transom, and door stays exactly where and how it is drawn — do "
+        f"not add, remove, move, or resize anything. {material_clause}; "
+        f"{roof_clause}. Keep the house, yard, and everything outside the "
+        "structure completely unchanged."
+    )
 
 
 # ─── Main prompt builder ──────────────────────────────────────────────────────
@@ -351,22 +476,45 @@ def build_prompt(
     try:
         wall_description = build_wall_description(wall_data, wall_combo)
 
+        # Parse walls once for the structural checks below (transom presence,
+        # gable orientation). Parse failures degrade to empty — same as before.
+        walls = []
+        if wall_data:
+            try:
+                walls = json.loads(wall_data) or []
+            except (json.JSONDecodeError, TypeError):
+                pass
+        combo = _resolve_combo(walls, wall_combo)
+
         # Roof style enforcement. The roof colour comes entirely from the prompt
         # (Canny only conveys the roof's shape), so be explicit: dark asphalt
         # shingles that match the existing house roof, never a light/white roof.
         roof_fragments = {
-            "gable": "peaked gable roof covered in dark gray-black matte asphalt shingles that exactly match the existing house roof in color and texture, opaque solid shingled roof, matte and non-reflective, NOT a white roof, NOT a light roof, NOT a reflective or glossy roof, NOT a roof reflecting the sky, NOT a metal roof, NOT a glass roof",
-            "studio":         "single-slope roof covered in dark asphalt shingles matching the existing house roof in color and texture, opaque solid shingled roof, NOT a white, light, metal, or glass roof",
+            "gable": "peaked gable roof covered in dark gray-black matte asphalt shingles with fine, closely spaced horizontal shingle courses and subtle granular texture, exactly matching the existing house roof in color and texture, opaque solid shingled roof, matte and non-reflective, NOT a white roof, NOT a light roof, NOT a reflective or glossy roof, NOT a roof reflecting the sky, NOT a metal roof, NOT a glass roof",
+            "studio":         "single-slope roof covered in dark asphalt shingles with fine, closely spaced horizontal shingle courses and subtle granular texture, matching the existing house roof in color and texture, opaque solid shingled roof, NOT a white, light, metal, or glass roof",
             "under_existing": "glass sunroom walls installed underneath the existing house roof, the existing roof stays unchanged above, no new roof added, the wall tops meet a white aluminum header beam just below the existing eaves",
             "roof_only":      "freestanding patio roof covered in dark asphalt shingles matching the existing house roof, opaque, NOT a white or metal roof",
         }
         roof_fragment = roof_fragments.get(roof_style, "dark asphalt shingled roof matching the existing house roof, opaque, not white")
 
+        # Gable orientation depends on the rendered pair (TODO item 3): only the
+        # Canny composite carried "peak toward the camera" before; now the prompt
+        # says it too. In AB the gable end is the front wall (B); in BC the gable
+        # end sits over the left side wall and the ridge runs across the view.
+        if roof_style == "gable":
+            roof_fragment += (
+                ", the triangular gable end faces the camera and the roof ridge "
+                "runs from the front peak straight back toward the house"
+                if combo == "AB" else
+                ", the roof ridge runs horizontally parallel to the front wall "
+                "and the triangular gable end sits over the left side wall"
+            )
+
         # Under-existing: fold in the EXISTING roof's shape so the prompt is
         # consistent with the preserved roof in the photo (gable peak vs studio slope).
         if roof_style == "under_existing" and under_existing_shape in ("gable", "studio"):
             shape_word = "gable" if under_existing_shape == "gable" else "single-slope studio"
-            beam_color = (wall_color or "white").strip().lower()
+            beam_color = _frame_color_word(wall_color)
             # Screen rooms have no glass — say "screen" here too, or the walls the
             # composite draws as insect screen get repainted as glazing.
             wall_noun = (
@@ -408,8 +556,31 @@ def build_prompt(
         # already-placed transoms LOOK — a single continuous band — which also
         # fights the model/LoRA tendency to split them. Kneewalls: no global
         # fragment at all; the per-unit description covers them precisely.
-        has_transom = "transom" in wall_data.lower() if wall_data else False
+        #
+        # Check actual panel TYPES on the RENDERED walls — the old substring test
+        # ("transom" in wall_data) was always True because the JSON always contains
+        # the key "unitTransomHeights", so every render got a transom fragment and
+        # FLUX painted transoms on transom-less rooms.
+        rendered_ids = WALL_POSITION_BY_COMBO[combo]
+        has_transom = any(
+            _panel_has_transom(pt)
+            for w in walls if w.get("id") in rendered_ids
+            for pt in w.get("panelTypes", [])
+        )
         band_material = "screen mesh" if is_screen_room else "glass"
+
+        # Panel integrity — ALWAYS on. History: the transom band sentence used to
+        # be (buggily) always-on and its tail ("not divided, not split into
+        # sections") doubled as the global anti-split constraint. When the transom
+        # fix made it conditional, transom-less renders immediately started
+        # splitting panels with extra mullions/mid-rails (2026-07-12 regression).
+        # This is the explicit replacement, phrased per FRAMED OPENING so it
+        # doesn't fight legitimate kneewall/transom sub-frames.
+        unit_word = "screen mesh panel" if is_screen_room else "pane of glass"
+        integrity_fragment = (
+            f"each framed opening holds a single uninterrupted {unit_word}, "
+            "not divided, not split into sections, "
+        )
         transom_fragment = (
             f"any transom is a single continuous horizontal {band_material} band spanning the "
             "full width of its panel, not divided, not split into sections, "
@@ -505,6 +676,7 @@ def build_prompt(
         middle_parts = []
         if roof_fragment:
             middle_parts.append(roof_fragment)
+        middle_parts.append(integrity_fragment)
         if transom_fragment:
             middle_parts.append(transom_fragment)
         if kneewall_fragment:

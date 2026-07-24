@@ -128,15 +128,14 @@ def run_prediction(model_version: str, input_data: dict):
 # POST /v1/models/{owner}/{model}/predictions  { "input": {...} }
 #
 # FLUX Fill Pro has no public version SHA — requires this separate endpoint.
+# NOTE: community models (e.g. yorickvp/llava-13b) 404 on this endpoint — they
+# must resolve a version via get_latest_version and run through /v1/predictions.
+# Verified live 2026-07-12 (the judge silently no-opped because of this).
 # ---------------------------------------------------------------------------
 
 def get_latest_version(owner_model: str) -> str:
-    """
-    Resolve a model's latest version SHA. Community models (not official
-    black-forest-labs/etc.) can't use the /v1/models/{owner}/{model}/predictions
-    endpoint — they must be run via /v1/predictions with a version id. We fetch
-    the latest version dynamically so a model update doesn't break us.
-    """
+    """Resolve a model's latest version SHA (needed to run community models via
+    the versioned /v1/predictions endpoint)."""
     try:
         with httpx.Client(timeout=httpx.Timeout(30.0)) as client:
             response = client.get(
@@ -321,9 +320,14 @@ def build_silhouette_mask(
 def prepare_render_mask(
     mask_bytes: bytes,
     threshold: int = 40,
-    grow_px: int = 4,
-    feather_px: int = 14,
+    grow_px: int = 3,
+    feather_px: int = 8,
 ) -> tuple[bytes, float]:
+    # grow/feather were 4/14 in the canny era (its output needed generous slop).
+    # At THIN structure edges — the roof rake/eave is only a few px wide — a 14px
+    # feather blends the AI roof ~50/50 with the photo behind it, which showed up
+    # as a faded, semi-transparent overhang (user 2026-07-13). Kontext output is
+    # clean enough for a tighter blend.
     """
     Turn the renderer's exact structure mask (white sunroom on black) into a
     clean feathered inpaint mask. Unlike the diff-based silhouette mask, this is
@@ -436,85 +440,6 @@ def composite_masked(ai_image_url: str, base_bytes: bytes, mask_bytes: bytes) ->
     return buf.getvalue()
 
 
-def run_flux_controlnet_inpaint(
-    image_url: str,
-    control_image_url: str,
-    mask_url: str,
-    prompt: str,
-    wall_system: str,
-    roof_style: str,
-    strength: float = 0.8,
-    conditioning_scale: float = 0.6,
-) -> str:
-    """
-    fermatresearch/flux-controlnet-inpaint — the structure-locked photoreal path.
-
-    Combines three constraints in one call so the AI restyles the sunroom without
-    moving it or losing the house:
-      - control_image (Canny ControlNet, conditioning_scale): the composite's
-        frame/panel/gable edges become a HARD geometric constraint, preserving
-        the camera angle and the configured layout.
-      - mask: only the sunroom silhouette is regenerated; the house, pool, and
-        patio stay pixel-identical.
-      - image + strength: img2img base; higher strength = more photoreal freedom,
-        but ControlNet still pins the structure.
-      - lora_weights/lora_scale: the trained sunroom LoRA supplies material realism.
-
-    Tuning is env-driven so it can be dialled without code changes:
-      FLUX_CONTROLNET_HYPER      ("false") — Hyper-FLUX 8-step distillation. OFF by
-                                  default: it conflicts with custom LoRAs + ControlNet
-                                  and produces garbled text artifacts across the image.
-      FLUX_CONTROLNET_STEPS      ("28")    — inference steps (use ~8 only if HYPER on).
-      FLUX_CONTROLNET_GUIDANCE   ("3.5")
-      FLUX_CONTROLNET_LORA_SCALE ("0.6")   — lower than the Fill default; a hot LoRA
-                                  is the other common cause of text/watermark noise.
-      FLUX_CONTROLNET_USE_LORA   ("true")  — set false to isolate whether the LoRA is
-                                  causing artifacts.
-
-    Field names match the model's published input schema. Note this model uses
-    `lora_weights`/`lora_scale` (NOT `extra_lora`/`extra_lora_scale` like FLUX Fill
-    Dev) and is a community model → run via the versioned /v1/predictions endpoint.
-    """
-    use_hyper  = os.getenv("FLUX_CONTROLNET_HYPER", "false").lower() == "true"
-    steps      = int(os.getenv("FLUX_CONTROLNET_STEPS", "8" if use_hyper else "28"))
-    guidance   = float(os.getenv("FLUX_CONTROLNET_GUIDANCE", "3.5"))
-    lora_scale = float(os.getenv("FLUX_CONTROLNET_LORA_SCALE", "0.6"))
-    use_lora   = os.getenv("FLUX_CONTROLNET_USE_LORA", "false").lower() == "true"
-
-    input_data = {
-        "prompt":              prompt,
-        "image":               image_url,
-        "control_image":       control_image_url,
-        "mask":                mask_url,
-        "strength":            strength,
-        "conditioning_scale":  conditioning_scale,
-        "guidance_scale":      guidance,
-        "num_inference_steps": steps,
-        "enable_hyper_flux_8_step": use_hyper,
-        "output_format":       "jpg",
-        "output_quality":      95,
-    }
-
-    lora_url = get_lora_url(wall_system, roof_style) if use_lora else None
-    if lora_url:
-        input_data["lora_weights"] = lora_url
-        input_data["lora_scale"]   = lora_scale
-        logger.info(
-            f"ControlNet inpaint ({wall_system}, {roof_style}) hyper={use_hyper} "
-            f"steps={steps} lora_scale={lora_scale}: {lora_url[:50]}..."
-        )
-    else:
-        why = "disabled via env" if not use_lora else "none for this combo"
-        logger.info(
-            f"ControlNet inpaint ({wall_system}, {roof_style}) hyper={use_hyper} "
-            f"steps={steps} — LoRA {why}"
-        )
-
-    # Community model → must run via the versioned /v1/predictions endpoint.
-    version = get_latest_version("fermatresearch/flux-controlnet-inpaint")
-    return run_prediction(version, input_data)
-
-
 def run_flux_control_dev(
     control_image_url: str,
     prompt: str,
@@ -573,18 +498,32 @@ def run_flux_control_dev(
     return run_model_prediction(model, input_data)
 
 
-def run_midas(image_url: str) -> str:
-    # Not currently called — removed from pipeline because SD inpainting
-    # doesn't accept a depth map input. Re-enable if switching to a
-    # ControlNet model that accepts depth conditioning.
-    try:
-        return run_prediction(
-            model_version="cjwbw/midas:a6ba5798f04f80d3b314de0f0a62277f21ab3503c60c84d4817de83c5edfdae0",
-            input_data={
-                "image": image_url,
-                "model_type": "dpt_beit_large_512"
-            }
-        )
-    except Exception as e:
-        logger.error(f"MiDaS error: {str(e)}")
-        raise
+def run_flux_kontext(input_image_url: str, instruction: str, seed: int | None = None) -> str:
+    """FLUX.1 Kontext — instruction-based image EDITING (FLUX_REPAINT_MODE=kontext).
+
+    The 3D composite goes in as an ACTUAL IMAGE and the model restyles it
+    photoreal while preserving what it sees — so material identity (glass vs
+    solid vs screen, transoms, door position) survives in the pixel domain
+    instead of being squeezed through a semantics-free canny edge map and
+    re-guessed from text. This is the architectural fix for config drift.
+
+    FLUX_KONTEXT_MODEL: black-forest-labs/flux-kontext-pro (default, best quality)
+    or flux-kontext-dev (open-weight; the LoRA path — flux-kontext-dev-lora runs
+    paired-trained finetunes). Official models → named endpoint.
+    """
+    model = os.getenv("FLUX_KONTEXT_MODEL", "black-forest-labs/flux-kontext-pro")
+
+    input_data = {
+        "prompt":        instruction,
+        "input_image":   input_image_url,
+        "aspect_ratio":  "match_input_image",
+        "output_format": "jpg",
+    }
+    if "kontext-dev" in model:
+        input_data["guidance"] = float(os.getenv("FLUX_KONTEXT_GUIDANCE", "2.5"))
+        input_data["output_quality"] = 95
+    if seed is not None:
+        input_data["seed"] = seed
+
+    logger.info(f"{model} edit (kontext mode), seed={seed}")
+    return run_model_prediction(model, input_data)

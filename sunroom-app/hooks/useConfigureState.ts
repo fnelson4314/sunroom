@@ -40,6 +40,9 @@ export type DoorStyle = "sliding" | "entry" | "storm" | "french";
 
 export type ScreenUnitType = "screen" | "door";
 
+// Screen doors are a fixed 7ft — matches DOOR_MAX_IN in ScreenRoomBuilder.tsx
+export const DOOR_MAX_IN = 84;
+
 export type ScreenWallSelection = {
   id: "A" | "B" | "C";
   widthIn: string;
@@ -47,8 +50,6 @@ export type ScreenWallSelection = {
   unitWidths: string[]; // auto-calculated from widthIn, individually adjustable
   unitTypes: ScreenUnitType[];
   unitLocked: boolean[]; // true = user manually set, preserved during redistribution
-  transomEnabled: boolean;
-  transomHeightIn: string;
   gableGlass: GableGlassConfig | null;
 };
 
@@ -57,7 +58,40 @@ export type ScreenRoomConfig = {
   kneewall: { enabled: boolean; heightIn: string; solidStyle: SolidMaterial };
   chairrail: { enabled: boolean; heightIn: string };
   handrail: { enabled: boolean };
+  // ONE transom for the whole screen room (was per wall). On walls with no
+  // gable/wing it's the usual band inside the unit cells; on the gable/wing wall
+  // that height is eaten out of the TOP of the wall and becomes the flat base of
+  // the gable/wing shape instead — see screenGableFlatIn.
+  transom: { enabled: boolean; heightIn: string };
 };
+
+/**
+ * Inches of the structure-wide transom that belong to this wall's gable/wing
+ * shape rather than its unit cells. 0 on every wall without a gable/wing, so
+ * those keep the in-cell band. Shared by the configurator canvas and the
+ * renderer payload so the 2D preview and the 3D composite can't disagree.
+ */
+export function screenGableFlatIn(
+  wall: ScreenWallSelection,
+  roofStyle: string | null,
+  transom: ScreenRoomConfig["transom"] | undefined,
+): number {
+  if (!transom?.enabled || !wall.gableGlass) return 0;
+  const carries =
+    (wall.id === "B" && roofStyle === "gable") ||
+    (wall.id !== "B" && roofStyle === "studio");
+  if (!carries) return 0;
+  const h = parseFloat(wall.heightIn) || 0;
+  const t = parseFloat(transom.heightIn) || 0;
+  // Clamp to half the wall only when we actually KNOW this wall's height. A wing
+  // wall whose own height was never entered (its tab was never opened —
+  // canGenerate only validated wall B until 2026-07-27) hit Math.min(t, 0) and
+  // silently lost its flat base: the 2D drew the trapezoid on the wall you had
+  // filled in while the 3D drew a plain triangle on the blank one. The renderer
+  // re-clamps against the height it actually draws (scene.html flatH), so the
+  // "never eat more than half" guarantee still holds where the height is real.
+  return h > 0 ? Math.max(0, Math.min(t, h / 2)) : Math.max(0, t);
+}
 
 export type WallSelection = {
   id: "A" | "B" | "C";
@@ -98,7 +132,7 @@ export type ConfigureState = {
   numberOfWalls: 1 | 2 | 3 | null;
   wallCombo: "AB" | "BC" | null;
   projectionDistance: string;
-  mountHeight: string; // gable/studio only: total height from ground to peak (in ft)
+  mountHeight: string; // total height ground→peak/wing-top, in INCHES (converted to ft at the API boundary)
   wallColor: "white" | "tan" | "bronze" | null;
   lineItems: Record<string, string>;
   wallType: Option | null;
@@ -152,8 +186,6 @@ function makeScreenWall(id: "A" | "B" | "C"): ScreenWallSelection {
     unitWidths: [],
     unitTypes: [],
     unitLocked: [],
-    transomEnabled: false,
-    transomHeightIn: "",
     gableGlass: null,
   };
 }
@@ -189,6 +221,19 @@ export function inToCeilFt(inches: string): number {
   const n = parseFloat(inches);
   if (!n || n <= 0) return 0;
   return Math.ceil(n / 12);
+}
+
+/**
+ * EXACT inches → feet, for DISPLAY hints under dimension inputs.
+ * Never use inToCeilFt for these: it made a 102" wall read "= 9 ft" when it is
+ * 8.5 ft, which reads as the app silently changing the entered dimension.
+ * Ceiling belongs to PRICING quantities (sq ft / lin ft) only.
+ * e.g. "102" → "8.5", "96" → "8", "125" → "10.42"
+ */
+export function inToFtLabel(inches: string): string {
+  const n = parseFloat(inches);
+  if (!n || n <= 0) return "0";
+  return String(Math.round((n / 12) * 100) / 100);
 }
 
 /**
@@ -269,6 +314,7 @@ const initialState: ConfigureState = {
     kneewall: { enabled: false, heightIn: "", solidStyle: "panel" },
     chairrail: { enabled: false, heightIn: "" },
     handrail: { enabled: false },
+    transom: { enabled: false, heightIn: "" },
   },
 };
 
@@ -338,8 +384,10 @@ export function useConfigureState() {
   // Under-existing only: toggle whether a new gable/wing infill is added above the
   // header. Turning it OFF ("walls only") drops any gable/wing glass selection and
   // its priced add-on from every wall, so nothing gable/wing is rendered or charged.
-  // Turning it back ON just flips the flag — WallBuilder re-initializes a default
-  // gable/wing glass config for eligible walls.
+  // Turning it back ON just flips the flag — the active builder re-initializes a
+  // default gable/wing config for eligible walls. Applies to BOTH builders: glass
+  // rooms use state.walls, screen rooms use state.screenRoom.walls — each has its
+  // own gableGlass field, so both must be cleared or the unused one goes stale.
   const setIncludeGableWings = (value: boolean, allOptions: Option[]) =>
     setState((prev) => {
       if (value) return { ...prev, includeGableWings: true };
@@ -363,6 +411,10 @@ export function useConfigureState() {
         ...prev,
         includeGableWings: false,
         walls: prev.walls.map((w) => ({ ...w, gableGlass: null })),
+        screenRoom: {
+          ...prev.screenRoom,
+          walls: prev.screenRoom.walls.map((w) => ({ ...w, gableGlass: null })),
+        },
         wallAddOns,
       };
     });
@@ -574,25 +626,22 @@ export function useConfigureState() {
       },
     }));
 
-  const setScreenTransom = (wallId: "A" | "B" | "C", enabled: boolean) =>
+  // Transom is picked ONCE for the whole screen room (height included).
+  const setScreenTransom = (enabled: boolean) =>
     setState((prev) => ({
       ...prev,
       screenRoom: {
         ...prev.screenRoom,
-        walls: prev.screenRoom.walls.map((w) =>
-          w.id === wallId ? { ...w, transomEnabled: enabled } : w,
-        ),
+        transom: { ...prev.screenRoom.transom, enabled },
       },
     }));
 
-  const setScreenTransomHeight = (wallId: "A" | "B" | "C", value: string) =>
+  const setScreenTransomHeight = (value: string) =>
     setState((prev) => ({
       ...prev,
       screenRoom: {
         ...prev.screenRoom,
-        walls: prev.screenRoom.walls.map((w) =>
-          w.id === wallId ? { ...w, transomHeightIn: value } : w,
-        ),
+        transom: { ...prev.screenRoom.transom, heightIn: value },
       },
     }));
 
@@ -604,9 +653,22 @@ export function useConfigureState() {
       ...prev,
       screenRoom: {
         ...prev.screenRoom,
-        walls: prev.screenRoom.walls.map((w) =>
-          w.id === wallId ? { ...w, gableGlass: config } : w,
-        ),
+        walls: prev.screenRoom.walls.map((w) => {
+          if (w.id === wallId) return { ...w, gableGlass: config };
+          // The wing MATERIAL is one choice for the whole room — pick solid on
+          // A and C follows. Pane count stays per-wall (it tracks that wall's
+          // own unit count). Walls with no wing config are left alone, so
+          // initialising one wall can never invent a wing on another.
+          if (!w.gableGlass || !config) return w;
+          return {
+            ...w,
+            gableGlass: {
+              ...w.gableGlass,
+              glassType: config.glassType,
+              solidStyle: config.solidStyle,
+            },
+          };
+        }),
       },
     }));
 
@@ -1105,6 +1167,29 @@ export function useConfigureState() {
 
   // ─── Pricing ───────────────────────────────────────────────────────────────
 
+  // The roof-cost formula, as a single source of truth for the UI (Step 6's
+  // live subtotal and Step 9's summary line both called their own inline copy
+  // of this before). calculateTotal/buildPriceBreakdown keep their own
+  // internal computation of the same formula, unchanged.
+  const getRoofCost = (): number => {
+    if (!state.roofType) return 0;
+    if (state.roofStyle === "roof_only") {
+      const w = inToCeilFt(state.roofOnlyWidthIn);
+      const d = inToCeilFt(state.roofOnlyDepthIn);
+      return state.roofType.unit_price * w * d;
+    }
+    const bWall = state.walls.find((w) => w.id === "B");
+    const width = inToCeilFt(bWall?.widthIn || "");
+    let depth = 0;
+    if (state.numberOfWalls === 1) {
+      depth = inToCeilFt(state.projectionDistance);
+    } else {
+      const sideWall = state.walls.find((w) => w.id === "A" || w.id === "C");
+      depth = inToCeilFt(sideWall?.widthIn || "");
+    }
+    return state.roofType.unit_price * (width + 2) * (depth + 1);
+  };
+
   const calculateTotal = (allOptions: Option[]): number => {
     let total = 0;
     const getOption = (id: string) => allOptions.find((o) => o.id === id);
@@ -1370,13 +1455,16 @@ export function useConfigureState() {
     if (!state.selectedProductLine) return false;
     if (!state.roofStyle) return false;
 
+    // EVERY wall needs dimensions, not just B. Checking only B let a 3-wall room
+    // generate with A/C blank (their tabs were never opened), and a blank height
+    // silently zeroed that wall's gable/wing flat base — see screenGableFlatIn.
+    const allDimensioned = (ws: { widthIn: string; heightIn: string }[]) =>
+      ws.length > 0 && ws.every((w) => !!w.widthIn && !!w.heightIn);
+
     // Screen room (2_inch)
     if (state.selectedProductLine.wall_system === "2_inch") {
       if (!state.wallType) return false;
-      if (state.screenRoom.walls.length === 0) return false;
-      const wallB = state.screenRoom.walls.find((w) => w.id === "B");
-      if (!wallB || !wallB.widthIn || !wallB.heightIn) return false;
-      return true;
+      return allDimensioned(state.screenRoom.walls);
     }
 
     // Roof-only: no wall config needed, just roof type
@@ -1387,19 +1475,13 @@ export function useConfigureState() {
     // Under-existing: no roof type needed, but needs walls
     if (state.roofStyle === "under_existing") {
       if (!state.wallType) return false;
-      if (state.walls.length === 0) return false;
-      const wallB = state.walls.find((w) => w.id === "B");
-      if (!wallB || !wallB.widthIn || !wallB.heightIn) return false;
-      return true;
+      return allDimensioned(state.walls);
     }
 
     // Standard: needs roof type + wall type + walls
     if (!state.roofType) return false;
     if (!state.wallType) return false;
-    if (state.walls.length === 0) return false;
-    const wallB = state.walls.find((w) => w.id === "B");
-    if (!wallB || !wallB.widthIn || !wallB.heightIn) return false;
-    return true;
+    return allDimensioned(state.walls);
   };
 
   // ─── Build generate params ─────────────────────────────────────────────────
@@ -1428,10 +1510,18 @@ export function useConfigureState() {
 
     const isScreenRoom = state.selectedProductLine?.wall_system === "2_inch";
 
-    // Convert wall dimensions to ft (ceiling) for backend prompt generation.
+    // TWO sets of dimensions on purpose:
+    //   widthIn/heightIn — EXACT entered inches. GEOMETRY (renderer + PnP camera
+    //     solve) uses these. Ceiling them inflated the drawn box by up to 11" per
+    //     dimension and manufactured the very "configured dims don't match the
+    //     photo" mismatch the footprint auto-fit exists to correct.
+    //   widthFt/heightFt — CEILED feet. Pricing rule + the human-readable prompt
+    //     description ("10ft wide"); never used for geometry.
     // Also resolve per-unit heights with global defaults.
     const wallDataForBackend = state.walls.map((wall) => ({
       id: wall.id,
+      widthIn: wall.widthIn,
+      heightIn: wall.heightIn,
       widthFt: String(inToCeilFt(wall.widthIn)),
       heightFt: String(inToCeilFt(wall.heightIn)),
       units: wall.units,
@@ -1455,19 +1545,33 @@ export function useConfigureState() {
     // 18×10×8 default box of GLASS panels. Project the screen config onto the same
     // wallData shape instead, so parseConfig / getPnPDims / build_wall_description
     // all keep working and the renderer solves against the real footprint.
+    // Screen doors are always 7ft — any extra wall height above that becomes an
+    // automatic transom over the door, independent of the wall's manual transom
+    // toggle (which only covers the non-door screen units).
+    const screenTransom = state.screenRoom.transom;
     const screenWallDataForBackend = state.screenRoom.walls.map((wall) => {
+      // On the gable/wing wall the transom is eaten out of the top of the wall
+      // and drawn as the flat base of the gable/wing shape, so the units below
+      // are shorter and carry NO transom band of their own.
+      const gableFlatIn = screenGableFlatIn(wall, state.roofStyle, screenTransom);
+      const bandIn = gableFlatIn > 0 || !screenTransom?.enabled
+        ? 0
+        : parseFloat(screenTransom.heightIn) || 0;
+      const unitAreaIn = (parseFloat(wall.heightIn) || 0) - gableFlatIn;
+      const doorTransomIn = Math.max(0, unitAreaIn - DOOR_MAX_IN);
       const panelTypes = wall.unitTypes.map((t) => {
         const door = t === "door";
-        if (wall.transomEnabled) return door ? "screen_door_t" : "screen_t";
-        return door ? "screen_door" : "screen";
+        if (door) return doorTransomIn > 0 ? "screen_door_t" : "screen_door";
+        return bandIn > 0 ? "screen_t" : "screen";
       });
       const units = panelTypes.length;
 
-      // Unit widths are absolute inches, but widthFt is CEILED to feet for pricing
-      // and the renderer lays units out left-to-right by their own widths. Rescale
-      // so they sum to the ceiled wall width — otherwise the last unit overhangs
-      // or leaves a gap of up to 11".
-      const targetIn = inToCeilFt(wall.widthIn) * 12;
+      // Unit widths are absolute inches and the renderer lays units out
+      // left-to-right by their own widths, so they must sum to the wall width or
+      // the last unit overhangs / leaves a gap. Target the EXACT wall width —
+      // targeting the CEILED width stretched every unit to fill up to 11" of
+      // width the wall doesn't actually have.
+      const targetIn = parseFloat(wall.widthIn) || 0;
       const raw = wall.unitWidths.map((w) => parseFloat(w) || 0);
       const rawSum = raw.reduce((a, b) => a + b, 0);
       const unitWidths =
@@ -1478,15 +1582,25 @@ export function useConfigureState() {
       const kneewall = state.screenRoom.kneewall;
       return {
         id: wall.id,
+        // Exact inches for geometry, ceiled feet for pricing/prompt — see the
+        // note on wallDataForBackend above.
+        widthIn: wall.widthIn,
+        heightIn: wall.heightIn,
         widthFt: String(inToCeilFt(wall.widthIn)),
         heightFt: String(inToCeilFt(wall.heightIn)),
         units,
         panelTypes,
         unitWidths,
-        // Transom is per-wall for screen rooms; fan it out per unit.
-        unitTransomHeights: Array.from({ length: units }, () =>
-          wall.transomEnabled ? wall.transomHeightIn : "",
-        ),
+        // One transom for the whole room, fanned out per unit — except doors,
+        // which always get their own auto transom above the fixed 7ft door.
+        unitTransomHeights: Array.from({ length: units }, (_, i) => {
+          if (wall.unitTypes[i] === "door") {
+            return doorTransomIn > 0 ? String(doorTransomIn) : "";
+          }
+          return bandIn > 0 ? String(bandIn) : "";
+        }),
+        // Height of the gable/wing shape's flat base (0 = plain triangle).
+        gableFlatIn,
         unitKneewallHeights: Array.from({ length: units }, () => ""),
         unitMaterials: Array.from({ length: units }, () => ({
           transom: "screen" as const,
@@ -1498,6 +1612,31 @@ export function useConfigureState() {
         gableGlass: wall.gableGlass,
       };
     });
+
+    // gableFlatIn has four independent ways to come out 0, and a 0 shows up in
+    // the composite as a plain triangle instead of the right trapezoid — with no
+    // clue which input was missing. Print the reason with the payload.
+    if (isScreenRoom) {
+      console.log(
+        "[configure] wing flat base per wall:",
+        state.screenRoom.walls
+          .map((w) => {
+            const flat = screenGableFlatIn(w, state.roofStyle, screenTransom);
+            if (flat > 0) return `${w.id}=${flat}in`;
+            const why = !screenTransom?.enabled
+              ? "transom off"
+              : !w.gableGlass
+                ? "no wing config on this wall"
+                : w.id === "B"
+                  ? "wall B (gable wall — studio wings are A/C)"
+                  : state.roofStyle !== "studio"
+                    ? `roof is ${state.roofStyle}, not studio`
+                    : "transom height blank";
+            return `${w.id}=0 (${why})`;
+          })
+          .join("  "),
+      );
+    }
 
     // Structure-wide screen features. Kneewall / chairrail / handrail run across
     // every wall rather than per unit, so they can't ride in wallData.
@@ -1538,7 +1677,11 @@ export function useConfigureState() {
       wallCombo: state.wallCombo ?? "",
       // Stringified for the router; generate.tsx converts back to a bool.
       includeGableWings: String(state.includeGableWings),
-      mountHeight: state.mountHeight,
+      // Entered in INCHES; the API/renderer contract is FEET (server.js does
+      // ×12). EXACT division — never ceil a geometry input.
+      mountHeight: state.mountHeight
+        ? String((parseFloat(state.mountHeight) || 0) / 12)
+        : "",
       roofColorNote: state.roofColorNote,
       wallColor: state.wallColor,
       projectionDistance: state.projectionDistance,
@@ -1556,9 +1699,14 @@ export function useConfigureState() {
 
   const hydrateFromDraft = (savedState: Record<string, unknown>) => {
     try {
+      const saved = savedState as Partial<ConfigureState>;
       setState((prev) => ({
         ...prev,
-        ...(savedState as Partial<ConfigureState>),
+        ...saved,
+        // Drafts saved before the transom moved to a single structure-wide
+        // setting have no screenRoom.transom — keep the default rather than
+        // hydrating it away as undefined.
+        screenRoom: { ...prev.screenRoom, ...(saved.screenRoom ?? {}) },
       }));
     } catch (e) {
       console.warn("hydrateFromDraft failed:", e);
@@ -1569,6 +1717,7 @@ export function useConfigureState() {
     state,
     setProductLine,
     buildPriceBreakdown,
+    getRoofCost,
     setRoofStyle,
     setRoofOnlySubStyle,
     setUnderExistingShape,

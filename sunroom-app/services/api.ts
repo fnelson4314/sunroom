@@ -58,6 +58,7 @@ export const createSession = async (data: {
   customer_email?: string;
   salesperson_id?: string;
   notes?: string;
+  house_photo_url?: string;
 }) => {
   const response = await api.post("/sessions/", data);
   return response.data;

@@ -1,14 +1,24 @@
+import FlowNav from "@/components/FlowNav";
+import StepDots, { StepDotItem, StepDotState } from "@/components/ui/StepDots";
 import { Colors } from "@/constants/Colors";
 import { FontSize } from "@/constants/Typography";
+import { useDesignSession } from "@/contexts/DesignSession";
 import {
   cancelGeneration,
   createSession,
   getGenerationStatus,
   startGeneration,
+  updateSession,
   uploadHousePhoto,
 } from "@/services/api";
-import { router, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { router, useLocalSearchParams, useNavigation } from "expo-router";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   BackHandler,
@@ -48,6 +58,16 @@ const STATUS_HINTS: Record<GenerateStatus, string> = {
   failed: "Something went wrong — you can try again",
 };
 
+// The 5 job-progress steps shown as dots below the status message — distinct
+// from FLOW_STEPS (the 5-SCREEN flow position shown in the header pill above).
+const PROGRESS_STEPS: { key: GenerateStatus; label: string }[] = [
+  { key: "uploading", label: "Upload photo" },
+  { key: "creating_session", label: "Save config" },
+  { key: "queued", label: "Queue job" },
+  { key: "generating", label: "Generate" },
+  { key: "complete", label: "Done" },
+];
+
 export default function GenerateScreen() {
   const params = useLocalSearchParams<{
     photoUri: string;
@@ -82,13 +102,47 @@ export default function GenerateScreen() {
     heightFt: string;
     totalPrice: string;
     priceBreakdown: string;
+    renderKey: string;
   }>();
+
+  const { setLastRender, setDraftId } = useDesignSession();
+  const navigation = useNavigation();
+
+  // Same flow-position chrome every other screen in the wizard gets. Generate
+  // is a nonNavigable step in FLOW_STEPS, so the jump menu shows it locked.
+  useLayoutEffect(() => {
+    navigation.setOptions({ headerTitle: () => <FlowNav current={2} /> });
+  }, [navigation]);
+
+  // Keep the shared session pointed at this design's row.
+  useEffect(() => {
+    if (params.draftId) setDraftId(params.draftId);
+  }, [params.draftId]);
 
   const [status, setStatus] = useState<GenerateStatus>("uploading");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [renderUrl, setRenderUrl] = useState<string | null>(null);
   const [renderUrls, setRenderUrls] = useState<string[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // High-water mark into PROGRESS_STEPS. "failed" isn't itself a progress
+  // step, so this remembers which step was active when it failed instead of
+  // losing that position (the previous inline indexOf(status) reset to -1 on
+  // failure, silently un-marking every dot as done).
+  const [progressIndex, setProgressIndex] = useState(0);
+  useEffect(() => {
+    const idx = PROGRESS_STEPS.findIndex((s) => s.key === status);
+    if (idx >= 0) setProgressIndex(idx);
+  }, [status]);
+
+  const progressItems: StepDotItem[] = PROGRESS_STEPS.map((step, i) => {
+    let state: StepDotState;
+    if (status === "failed" && i === progressIndex) state = "failed";
+    else if (i < progressIndex || status === "complete") state = "done";
+    else if (i === progressIndex) state = "current";
+    else state = "future";
+    return { key: step.key, label: step.label, state };
+  });
 
   // Ref to hold poll interval so we can clear it
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -153,24 +207,40 @@ export default function GenerateScreen() {
       const tempSessionId = `temp-${Date.now()}`;
       const photoUrl = await uploadHousePhoto(params.photoUri, tempSessionId);
 
-      // Step 2 — Create the session in the database
+      // Step 2 — Persist onto the DB row.
+      // configure.tsx already saved a draft row (params.draftId) holding the
+      // FULL config + the before-photo/box (draft_state._meta). Update THAT row
+      // into the session instead of inserting a bare new one, so a single
+      // configurations row carries config + before-photo + render + pricing —
+      // otherwise reopening a completed session showed no photo and no config
+      // (they lived only on the orphaned draft row). Falls back to a fresh row
+      // if somehow there's no draft.
       setStatus("creating_session");
-      const session = await createSession({
-        product_line_id: params.productLineId,
-        selected_options: JSON.parse(params.selectedOptions || "[]"),
+      const sharedFields = {
+        house_photo_url: photoUrl,
         width_ft: parseFloat(wallB?.widthFt || "0") || undefined,
         depth_ft:
           parseFloat(sideWall?.widthFt || params.projectionDistance || "0") ||
           undefined,
         height_ft: parseFloat(wallB?.heightFt || "0") || undefined,
         total_price: parseFloat(params.totalPrice || "0") || undefined,
-        customer_name: params.customerName || undefined,
-        customer_email: params.customerEmail || undefined,
-        salesperson_id: "dev-salesperson-1",
         notes: params.notes || undefined,
-      });
-
-      const newSessionId = session.id;
+      };
+      let newSessionId: string;
+      if (params.draftId) {
+        await updateSession(params.draftId, sharedFields);
+        newSessionId = params.draftId;
+      } else {
+        const session = await createSession({
+          product_line_id: params.productLineId,
+          selected_options: JSON.parse(params.selectedOptions || "[]"),
+          customer_name: params.customerName || undefined,
+          customer_email: params.customerEmail || undefined,
+          salesperson_id: "dev-salesperson-1",
+          ...sharedFields,
+        });
+        newSessionId = session.id;
+      }
       setSessionId(newSessionId);
 
       // Step 3 — Fire the AI generation
@@ -255,6 +325,12 @@ export default function GenerateScreen() {
           setRenderUrls(urls);
           setRenderUrl(urls[0] ?? result.render_url ?? null);
           setStatus("complete");
+          // Cache this render against its input key so going back to the
+          // configurator and returning without visual changes reuses it instead
+          // of regenerating (see contexts/DesignSession).
+          if (urls.length > 0 && params.renderKey) {
+            setLastRender({ key: params.renderKey, sessionId: id, renderUrls: urls });
+          }
         } else if (result.status === "failed") {
           clearInterval(pollRef.current!);
           setStatus("failed");
@@ -342,81 +418,15 @@ export default function GenerateScreen() {
           {errorMessage || STATUS_HINTS[status]}
         </Text>
 
-        {/* Progress steps */}
+        {/* Progress steps — same shared dot component the configurator's
+            StepIndicator uses, in its dark/status-semantic variant. */}
         <View style={styles.progressSteps}>
-          {/* Lines layer — sits behind everything */}
-          <View style={styles.linesLayer}>
-            {[0, 1, 2, 3].map((i) => {
-              const steps: GenerateStatus[] = [
-                "uploading",
-                "creating_session",
-                "queued",
-                "generating",
-                "complete",
-              ];
-              const currentIndex = steps.indexOf(status);
-              const isDone = i < currentIndex || status === "complete";
-              return (
-                <View
-                  key={i}
-                  style={[
-                    styles.progressLine,
-                    isDone && styles.progressLineDone,
-                  ]}
-                />
-              );
-            })}
-          </View>
-
-          {/* Dots and labels layer */}
-          <View style={styles.dotsLayer}>
-            {(
-              [
-                { key: "uploading", label: "Upload photo" },
-                { key: "creating_session", label: "Save config" },
-                { key: "queued", label: "Queue job" },
-                { key: "generating", label: "Generate" },
-                { key: "complete", label: "Done" },
-              ] as const
-            ).map((step) => {
-              const steps: GenerateStatus[] = [
-                "uploading",
-                "creating_session",
-                "queued",
-                "generating",
-                "complete",
-              ];
-              const currentIndex = steps.indexOf(status);
-              const stepIndex = steps.indexOf(step.key);
-              const isDone = stepIndex < currentIndex || status === "complete";
-              const isCurrent = step.key === status && status !== "complete";
-
-              return (
-                <View key={step.key} style={styles.progressStep}>
-                  <View
-                    style={[
-                      styles.progressDot,
-                      isDone && styles.progressDotDone,
-                      isCurrent && styles.progressDotCurrent,
-                      status === "failed" &&
-                        isCurrent &&
-                        styles.progressDotFailed,
-                    ]}
-                  >
-                    {isDone && <Text style={styles.progressDotCheck}>✓</Text>}
-                  </View>
-                  <Text
-                    style={[
-                      styles.progressLabel,
-                      (isDone || isCurrent) && styles.progressLabelActive,
-                    ]}
-                  >
-                    {step.label}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
+          <StepDots
+            items={progressItems}
+            variant="dark"
+            layout="fixed"
+            showNumbers={false}
+          />
         </View>
 
         {/* Action buttons */}
@@ -503,73 +513,6 @@ const styles = StyleSheet.create({
     width: "100%",
     marginTop: 24,
     marginBottom: 32,
-    position: "relative",
-  },
-  progressStep: {
-    alignItems: "center",
-    flex: 1,
-  },
-  linesLayer: {
-    position: "absolute",
-    top: 13,
-    left: "10%",
-    right: "10%",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    zIndex: 0,
-  },
-  dotsLayer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    zIndex: 1,
-  },
-  progressDot: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.15)",
-    borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.3)",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 2,
-  },
-  progressDotDone: {
-    backgroundColor: Colors.status.complete,
-    borderColor: Colors.status.complete,
-  },
-  progressDotCurrent: {
-    borderColor: Colors.white,
-    backgroundColor: "rgba(255,255,255,0.15)",
-  },
-  progressDotFailed: {
-    borderColor: Colors.status.failed,
-    backgroundColor: Colors.status.failed,
-  },
-  progressDotCheck: {
-    color: Colors.white,
-    fontSize: FontSize.body,
-    fontWeight: "700",
-  },
-  progressLabel: {
-    fontSize: FontSize.caption,
-    color: "rgba(255,255,255,0.55)",
-    marginTop: 5,
-    textAlign: "center",
-    width: 58,
-  },
-  progressLabelActive: {
-    color: "rgba(255,255,255,0.95)",
-    fontWeight: "600",
-  },
-  progressLine: {
-    flex: 1,
-    height: 2,
-    backgroundColor: "rgba(255,255,255,0.2)",
-    marginHorizontal: 2,
-  },
-  progressLineDone: {
-    backgroundColor: Colors.status.complete,
   },
   primaryButton: {
     backgroundColor: Colors.primary,

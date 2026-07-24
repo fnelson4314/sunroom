@@ -24,7 +24,11 @@ import logging
 import os
 import re
 
-from app.replicate_service import run_model_prediction
+from app.replicate_service import (
+    get_latest_version,
+    run_model_prediction,
+    run_prediction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,14 +37,54 @@ JUDGE_MODEL = os.getenv("JUDGE_MODEL", "yorickvp/llava-13b")
 JUDGE_PROMPT = (
     "You are grading an AI-generated architectural render of a sunroom or screened "
     "porch added onto a house. Rate it from 1 to 10 on these combined: (a) how "
-    "photorealistic and artifact-free it looks, and (b) how well it matches this "
-    "intended description:\n\n{desc}\n\n"
-    "A good render is realistic and clean and matches the described walls, doors, "
-    "and materials. Give a LOW score for: wrong materials (e.g. brick when siding "
-    "was described, or glass when insect screen was described), melted or warped "
-    "frames, blur, duplicated/extra panels, and obvious AI artifacts. "
-    "Reply with ONLY a single number from 1 to 10."
+    "photorealistic and artifact-free it looks, and (b) how exactly it matches this "
+    "intended structure:\n\n{desc}\n\n"
+    "Score 3 or LOWER if ANY structural error appears: a panel filled in as solid "
+    "or white where glass is described, a missing or extra transom band, a missing "
+    "door or wrong door type, extra mullions or split panels not in the description, "
+    "house-style window sashes painted inside the sunroom glass, or insect screen "
+    "rendered as glass. Also score LOW for unrealistic glass: heavily saturated "
+    "solid-blue glass, or fully opaque black glass with no reflections — good "
+    "sunroom glass is lightly tinted, slightly reflective, and partially "
+    "see-through. Other flaws (warped frames, blur, artifacts, glassy reflective "
+    "roof) also lower the score. Reply with ONLY a single number from 1 to 10."
 )
+
+
+def _focus_desc(desc: str) -> str:
+    """Hand the judge the STRUCTURE part of the prompt, not the whole thing.
+
+    The full positive prompt buries the wall config ~1000+ chars in (behind the
+    quality prefix and roof boilerplate), so the old desc[:1200] truncation gave
+    the judge a description with little or NO config in it — it was grading
+    config match blind. The structure sentence carries the per-wall panel list,
+    doors, and transoms, which is exactly what the judge needs.
+    """
+    for marker in ("Sunroom structure:", "Screened porch structure:"):
+        i = desc.find(marker)
+        if i != -1:
+            return desc[i:i + 1600]
+    return desc[:1600]
+
+# Community models 404 on the named /v1/models/{owner}/{model}/predictions
+# endpoint (verified live 2026-07-12 — the judge silently returned None on every
+# call). Resolve the version ONCE per process and run via /v1/predictions;
+# empty string = resolution failed, fall back to the named endpoint (works for
+# official models if JUDGE_MODEL is ever pointed at one).
+_judge_version: str | None = None
+
+
+def _run_judge(input_data: dict):
+    global _judge_version
+    if _judge_version is None:
+        try:
+            _judge_version = get_latest_version(JUDGE_MODEL)
+        except Exception as e:
+            logger.warning(f"judge version resolution failed ({e}) — trying named endpoint")
+            _judge_version = ""
+    if _judge_version:
+        return run_prediction(_judge_version, input_data)
+    return run_model_prediction(JUDGE_MODEL, input_data)
 
 
 def score_render(image_url: str, desc: str) -> float | None:
@@ -50,11 +94,10 @@ def score_render(image_url: str, desc: str) -> float | None:
     the render rather than dropping it.
     """
     try:
-        out = run_model_prediction(
-            JUDGE_MODEL,
+        out = _run_judge(
             {
                 "image": image_url,
-                "prompt": JUDGE_PROMPT.format(desc=desc[:1200]),
+                "prompt": JUDGE_PROMPT.format(desc=_focus_desc(desc)),
                 "max_tokens": 8,
             },
         )
