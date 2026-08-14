@@ -162,6 +162,10 @@ export default function Step5Walls({
           wallColor={configure.state.wallColor}
           onWallColorChange={configure.setWallColor}
           onSolidMaterialChange={configure.setSolidPanelMaterial}
+          transomSolidStyle={configure.state.solidStyles.transom}
+          kneewallSolidStyle={configure.state.solidStyles.kneewall}
+          wingSolidStyle={configure.state.solidStyles.wing}
+          onSolidStyleChange={configure.setSolidStyle}
           onWallUnitWidthChange={configure.setWallUnitWidth}
         />
       )}

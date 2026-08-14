@@ -522,6 +522,17 @@ def run_flux_kontext(input_image_url: str, instruction: str, seed: int | None = 
     if "kontext-dev" in model:
         input_data["guidance"] = float(os.getenv("FLUX_KONTEXT_GUIDANCE", "2.5"))
         input_data["output_quality"] = 95
+    # Paired-LoRA path: flux-kontext-dev-lora loads a trained LoRA from a public
+    # URL (HF resolve link) and blends it at lora_strength. Set via .env so the
+    # checkpoint / strength can be swapped without a code change. No URL → behaves
+    # as plain kontext-dev.
+    if "dev-lora" in model:
+        lora_url = os.getenv("FLUX_KONTEXT_LORA_WEIGHTS", "").strip()
+        if lora_url:
+            input_data["lora_weights"] = lora_url
+            input_data["lora_strength"] = float(
+                os.getenv("FLUX_KONTEXT_LORA_STRENGTH", "1.0")
+            )
     if seed is not None:
         input_data["seed"] = seed
 

@@ -74,6 +74,20 @@
       // Bare declaration on purpose — same clobber note as SKY_ENV above.
       var ROOF_RISE;
 
+      // ── King-post thickness (ONE knob) ──────────────────────────────────────
+      // The beefy centre post that runs continuously up the gable AND down the
+      // wall (the vertical circled in the user's render). Defined here ONCE so
+      // buildWall's kingW and buildGable's gKingW stay identical — if they differ,
+      // the post visibly jogs at the transom line. Value = frame width × a
+      // multiplier (6"/all-season frames a touch thicker than 4"/three-season).
+      // ↓↓ CHANGE THESE MULTIPLIERS to make the centre post skinnier/thicker ↓↓
+      // Reference: plain between-unit side posts are fw*3.0 (postW in buildWall),
+      // thin decorative gable dividers are fw*1.0 (gThinW in buildGable). Pick a
+      // value between them for a subtle king; use ≥3.0 to make it a bold fat post.
+      function kingPostW(fw) {
+        return fw * (fw >= 0.45 ? 2.2 : 2.0);
+      }
+
       function glassMat(hex, opacity = 0.8) {
         // Semi-transparent dark glass with a sky sheen — reads as real glass.
         // The catch in Canny mode: see-through glass also reveals the EXISTING
@@ -94,16 +108,30 @@
         //    visible sky-reflection sheen (the dim interior comes from the
         //    occluder box behind the glass, unchanged).
         const kontext = GLASS_STYLE === "kontext";
+        // CONFIG-FIDELITY (2026-08-13): the old kontext sky-wash (envMap 0.65 +
+        // reflectivity/clearcoat 0.5) reflected the bright sky so hard the dark tint
+        // washed out to a PALE blue-gray only one shade off the WHITE solids — so
+        // Kontext (and the LoRA, which only sees these pixels) couldn't tell a
+        // glass transom from a solid one and coin-flipped in the small transom /
+        // pentagon panes. Pulled the reflection way down so the DARK tint dominates
+        // and glass sits clearly below white in value; a light clearcoat keeps a
+        // hint of sheen so it still reads as glazing, not a dead-black panel. This
+        // is the composite-clarity lever (widening the glass↔solid value gap), NOT
+        // a realism tweak — the AI adds realism, the composite must be unambiguous.
         const m = new THREE.MeshPhysicalMaterial({
-          color: hex,
+          // Darken the tint AND raise opacity for kontext: the pane is a LIT material
+          // over a partly-bright background (sky behind the gable panes), so a
+          // "dark" base still washed pale. A darker color + near-opaque body makes
+          // the dark tint dominate, opening a clear value gap from the white solids.
+          color: kontext ? darken(hex, 22) : hex,
           transparent: true,
-          opacity,
-          roughness: kontext ? 0.12 : 0.3,
+          opacity: kontext ? 0.95 : opacity,
+          roughness: kontext ? 0.14 : 0.3,
           metalness: 0.0,
-          clearcoat: kontext ? 0.5 : 0.15,
-          clearcoatRoughness: kontext ? 0.12 : 0.2,
-          reflectivity: kontext ? 0.5 : 0.2,
-          envMapIntensity: kontext ? 0.65 : 0.2,
+          clearcoat: kontext ? 0.32 : 0.15,
+          clearcoatRoughness: kontext ? 0.14 : 0.2,
+          reflectivity: kontext ? 0.28 : 0.2,
+          envMapIntensity: kontext ? 0.22 : 0.2,
           side: THREE.DoubleSide,
         });
         if (SKY_ENV) m.envMap = SKY_ENV;
@@ -125,6 +153,17 @@
         });
       }
       function frameMat(hex) {
+        // Bronze reads almost-black in the 2D swatch, but a LIT metal material
+        // tone-maps dark colors way up (r128 has no ColorManagement — see the
+        // screenMat note), so it came out tan/gold in the composite. Render the
+        // dark bronze UNLIT + calibrated so it stays near-black like the 2D. White
+        // and tan are light enough to keep the normal lit metal look.
+        if (hex === 0x3e2810) {
+          return new THREE.MeshBasicMaterial({
+            color: 0x0a0705,
+            side: THREE.DoubleSide,
+          });
+        }
         return new THREE.MeshStandardMaterial({
           color: hex,
           roughness: 0.25,
@@ -160,7 +199,9 @@
           side: THREE.DoubleSide,
         });
       }
-      // Solid kneewall skirt below the screens, per the configured material.
+      // Solid-siding palette (panel/vinyl/hardieboard), keyed by solidStyle. Named
+      // for the screen-room kneewall it started on; now the shared solid color for
+      // sunroom kneewalls, transoms, and gable/wing fills too.
       function kneewallHex(solidStyle) {
         return solidStyle === "vinyl"
           ? 0xe8e4dc
@@ -170,6 +211,30 @@
       }
       function kneewallMat(solidStyle) {
         return solidMat(kneewallHex(solidStyle));
+      }
+      // Horizontal lap-siding course lines for a solid region (the dark shadow
+      // under each board), so vinyl reads as tight 4in courses and hardieboard as
+      // wider 8in courses, while a smooth "panel" gets none. Mirrors the
+      // screen-room kneewall seams; without these the sunroom solids were flat
+      // near-white boxes you couldn't tell apart.
+      function lapCourseYs(solidStyle, yBot, yTop) {
+        const boardFt =
+          solidStyle === "vinyl"
+            ? 4 / 12
+            : solidStyle === "hardieboard"
+              ? 8 / 12
+              : 0;
+        if (boardFt <= 0) return [];
+        const ys = [];
+        for (let y = yBot + boardFt; y < yTop - 1e-3; y += boardFt) ys.push(y);
+        return ys;
+      }
+      function seamMat(solidStyle) {
+        // Vinyl's base is near-white, so it needs a harder darkened line than
+        // hardieboard or FLUX flattens the courses back to a smooth skirt.
+        return solidMat(
+          darken(kneewallHex(solidStyle), solidStyle === "vinyl" ? 155 : 120),
+        );
       }
       // Procedural shingle texture: rows of asphalt-shingle courses with offset
       // tab joints. The COLOR doesn't matter to Canny (edges only) — the point is
@@ -210,8 +275,10 @@
       // courses, so a tile covers ROWS*EXPOSURE inches; shingleTiles(ft) converts
       // a real dimension to texture repeats so course spacing matches reality at
       // any roof size (a 20ft roof gets ~2× the courses of a 10ft one).
-      const SHINGLE_EXPOSURE_IN = 6, SHINGLE_ROWS = 7;
-      const shingleTiles = (ft) => (ft * 12) / (SHINGLE_EXPOSURE_IN * SHINGLE_ROWS);
+      const SHINGLE_EXPOSURE_IN = 6,
+        SHINGLE_ROWS = 7;
+      const shingleTiles = (ft) =>
+        (ft * 12) / (SHINGLE_EXPOSURE_IN * SHINGLE_ROWS);
       function shingleMat(hex, repX, repY) {
         // Roof PLANES (called WITH texture-repeat args) are UNLIT. The scene's
         // bright warm lights (ambient + directional, both warm-white) washed the
@@ -268,7 +335,16 @@
         return g;
       }
 
-      function buildPanel(unit, w, h, fw, fc, mirrored = false) {
+      function buildPanel(
+        unit,
+        w,
+        h,
+        fw,
+        fc,
+        mirrored = false,
+        splitTransom = false,
+        splitKneewall = false,
+      ) {
         const g = new THREE.Group(),
           fmat = frameMat(fc),
           D = 0.07;
@@ -291,7 +367,12 @@
           "oper_kneewall",
           "oper_tk",
         ].includes(pt);
-        const isDoor = ["door", "door_t", "screen_door", "screen_door_t"].includes(pt);
+        const isDoor = [
+          "door",
+          "door_t",
+          "screen_door",
+          "screen_door_t",
+        ].includes(pt);
         const isOper = pt.startsWith("oper");
         const isSolid = pt === "solid_panel";
         let tH = unit.transom_h_in > 0 ? unit.transom_h_in / 12 : h * 0.18;
@@ -304,8 +385,26 @@
             ? screenMat()
             : unit.transom_mat === "glass"
               ? glassMat(0x2b4754, 0.8)
-              : solidMat(0xc8bcaa);
+              : kneewallMat(unit.transom_solid_style);
           g.add(box(w - fw * 2, tH, D, tmat, w / 2, h - tH / 2, 0));
+          // Lap-siding courses on a solid transom (vinyl/hardieboard).
+          if (unit.transom_mat === "solid")
+            for (const y of lapCourseYs(unit.transom_solid_style, h - tH, h))
+              g.add(
+                box(
+                  w - fw * 2,
+                  0.08,
+                  0.11,
+                  seamMat(unit.transom_solid_style),
+                  w / 2,
+                  y,
+                  0,
+                ),
+              );
+          // Split transom: a center mullion divides the band into two panes
+          // (per-wall toggle, matches the 2D configurator). Drawn proud so it reads
+          // on both faces of the mirrored front wall and over a solid transom.
+          if (splitTransom) g.add(box(fw, tH, 0.2, fmat, w / 2, h - tH / 2, 0));
           // bolder divider rail so Canny clearly separates the transom from the
           // main glass (otherwise the AI fills the transom as one solid panel)
           g.add(box(w, fw * 1.3, D * 1.3, fmat, w / 2, h - tH - fw / 2, 0));
@@ -324,6 +423,35 @@
                 ? glassMat(0x2b4754, 0.8)
                 : glassMat(0x2b4754, 0.8);
         g.add(box(w - fw * 2, glH, D, mainMat, w / 2, glCY, 0));
+        // GLASS DOOR leaf frame (kontext, config fidelity 2026-08-13): a plain
+        // full-height glass pane reads to the model as a WINDOW, so it drops the
+        // door and regularizes the wall to match its kneewall'd neighbours (user
+        // report: C-wall door rendered as op-windows + kneewall). Give the glass
+        // door the same unmistakable-DOOR treatment the SCREEN door already has —
+        // a bold perimeter leaf frame plus, most importantly, a BOTTOM KICK RAIL:
+        // the single strongest "door, not window" cue, and it visually separates
+        // the door (glass to a floor rail) from adjacent windows (glass to a
+        // kneewall band). Drawn proud on both faces. Handle/meeting-stile below
+        // are unchanged.
+        if (!isScreen && isDoor && GLASS_STYLE === "kontext") {
+          const dx0 = fw,
+            dx1 = w - fw,
+            ddw = dx1 - dx0,
+            dsw = fw * 1.25; // door stile/rail — a touch bolder than a window frame
+          g.add(box(dsw, glH, 0.18, fmat, dx0 + dsw / 2, glCY, 0.02)); // left stile
+          g.add(box(dsw, glH, 0.18, fmat, dx1 - dsw / 2, glCY, 0.02)); // right stile
+          g.add(box(ddw, dsw, 0.18, fmat, w / 2, botY + glH - dsw / 2, 0.02)); // top rail
+          g.add(box(ddw, dsw * 1.6, 0.2, fmat, w / 2, botY + dsw * 0.8, 0.02)); // BOLD bottom kick rail
+          // Mid (lock) rail + a PROMINENT vertical pull handle — the strongest
+          // "door" cues for the AI. The old sliding flush-grip was too subtle and
+          // the door read as a window; a full-height glass door still gets a real
+          // visible handle. Metal grey, drawn well proud so it survives the repaint.
+          g.add(box(ddw, dsw * 1.1, 0.18, fmat, w / 2, glCY, 0.02)); // mid/lock rail
+          g.add(
+            box(fw * 0.55, glH * 0.32, fw * 1.4, solidMat(0x8d9196),
+                dx1 - dsw - fw * 0.6, glCY + glH * 0.02, 0.14), // vertical pull, latch side
+          );
+        }
         // Screen door: a hinged single leaf, not a slider. Give it its own bold
         // perimeter stile + a mid rail so Canny reads a DOOR inside the screen
         // wall — without it the door unit is indistinguishable from a screen bay.
@@ -350,13 +478,21 @@
           // White in kontext mode (real product); grey for canny edge contrast.
           g.add(
             box(
-              fw * 1.8, fw * 0.5, fw * 0.9,
+              fw * 1.8,
+              fw * 0.5,
+              fw * 0.9,
               solidMat(GLASS_STYLE === "kontext" ? 0xdadada : 0x888888),
-              x1 - fw * 2.0, midY + glH * 0.06, 0.09,
+              x1 - fw * 2.0,
+              midY + glH * 0.06,
+              0.09,
             ),
           );
         }
-        if (!isScreen && isDoor && ["sliding", "french"].includes(unit.door_style)) {
+        if (
+          !isScreen &&
+          isDoor &&
+          ["sliding", "french"].includes(unit.door_style)
+        ) {
           // Center meeting stile, mode-split: canny needed a BOLD 1.7× stile so
           // the edge map read a sliding door instead of two narrow fixed panels;
           // kontext copies the composite pixels literally, so the stile must be
@@ -373,24 +509,26 @@
             // in-plane rotation that orients the opening.
             const handleX = fw * 2.2;
             const camZ = mirrored ? -1 : 1;
-            // Handle colour is mode-split: canny needed an UNLIT DARK handle (a
-            // lit material washes to mid-grey and Canny missed it; dark = strong
-            // edge against the white frame). Kontext copies the composite pixels
-            // literally, so the handle must look like the REAL product: white,
-            // lit, reading as a 3D pull by its shading (user request 2026-07-13).
+            // Real sliding doors have no protruding handle on the outside — just
+            // a small flush FINGER-GRIP recess to slide the leaf. So kontext
+            // draws a subtle dark grip on the meeting stile (matching the real
+            // doors), NOT the old protruding bar/C pull. Canny keeps its bold
+            // C-torus purely as an edge cue (its edge map needs a bold shape).
             if (GLASS_STYLE === "kontext") {
-              // Kontext: a CRISP slim vertical bar pull (the real product's white
-              // handle). The soft white C-torus rendered as an indistinct smudge
-              // — a clean box with a hard silhouette survives the repaint.
-              const barMat = new THREE.MeshStandardMaterial({
-                color: 0xdadada,
-                roughness: 0.35,
-                metalness: 0.2,
-              });
-              g.add(box(
-                fw * 0.35, glH * 0.22, fw * 0.35,
-                barMat, handleX, glCY, camZ * (fw * 0.3),
-              ));
+              // Small near-black flush pull on the meeting stile at grip height —
+              // subtle so the repaint copies just a finger grip, not a handle.
+              const gripMat = new THREE.MeshBasicMaterial({ color: 0x0a0c0e });
+              g.add(
+                box(
+                  fw * 0.28,
+                  glH * 0.09,
+                  fw * 0.28,
+                  gripMat,
+                  w / 2,
+                  glCY - glH * 0.05,
+                  camZ * (fw * 0.18),
+                ),
+              );
             } else {
               // Canny: unlit DARK stretched C-torus — a lit material washes to
               // mid-grey and Canny missed it; dark = strong edge on white frame.
@@ -413,13 +551,23 @@
             // french: simple pull near the centre where the two leaves meet.
             // Same mode split as the sliding pull: dark unlit for canny edges,
             // white lit (real product) for kontext.
-            g.add(box(
-              fw * 0.35, glH * 0.32, fw * 0.5,
-              GLASS_STYLE === "kontext"
-                ? new THREE.MeshStandardMaterial({ color: 0xdadada, roughness: 0.35, metalness: 0.2 })
-                : new THREE.MeshBasicMaterial({ color: 0x101316 }),
-              w / 2 + fw * 0.9, glCY, D * 0.95,
-            ));
+            g.add(
+              box(
+                fw * 0.35,
+                glH * 0.32,
+                fw * 0.5,
+                GLASS_STYLE === "kontext"
+                  ? new THREE.MeshStandardMaterial({
+                      color: 0xdadada,
+                      roughness: 0.35,
+                      metalness: 0.2,
+                    })
+                  : new THREE.MeshBasicMaterial({ color: 0x101316 }),
+                w / 2 + fw * 0.9,
+                glCY,
+                D * 0.95,
+              ),
+            );
           }
         }
         if (isOper) {
@@ -429,34 +577,90 @@
           // slider reads. camZ keeps "proud" facing the camera on the mirrored
           // front wall (local +z points away there — see the mirrored-wall note).
           const camZ = mirrored ? -1 : 1,
-            sw = fw * 0.45,           // sash frame — noticeably slimmer than the
-            // unit frame (0.7 read too chunky in renders, user 2026-07-13)
-            sx0 = fw,                 // sash = left half of the glass area...
-            sx1 = w / 2 + fw * 0.5,   // ...overlapping the center line slightly
+            // Sash frame width (the blue-outlined frame around the sliding pane).
+            // ↓ CHANGE THIS to make the operable sash frame thicker/thinner. Kept
+            // shrinking because it reads chunky and eats the operable pane: 0.7 →
+            // 0.45 → 0.28.
+            sw = fw * 0.28,
+            sx0 = fw, // sash = left half of the glass area...
+            sx1 = w / 2 + fw * 0.4, // ...overlapping the center line slightly
             sashW = sx1 - sx0,
             sashZ = camZ * (D / 2 + 0.05),
             sashD = 0.09;
           // meeting stile of the fixed half (behind the sash, on the glass plane)
           g.add(box(fw * 0.4, glH, D * 1.6, fmat, w / 2, glCY, 0.01));
           // sash pane, proud of the main glass
-          g.add(box(
-            sashW - sw * 2, glH - sw * 2, 0.02,
-            glassMat(0x2f4f5e, 0.85),
-            sx0 + sashW / 2, glCY, sashZ,
-          ));
+          g.add(
+            box(
+              sashW - sw * 2,
+              glH - sw * 2,
+              0.02,
+              glassMat(0x2f4f5e, 0.85),
+              sx0 + sashW / 2,
+              glCY,
+              sashZ,
+            ),
+          );
           // sash frame: top, bottom, outer stile, bolder meeting stile
-          g.add(box(sashW, sw, sashD, fmat, sx0 + sashW / 2, botY + glH - sw / 2, sashZ));
-          g.add(box(sashW, sw, sashD, fmat, sx0 + sashW / 2, botY + sw / 2, sashZ));
+          g.add(
+            box(
+              sashW,
+              sw,
+              sashD,
+              fmat,
+              sx0 + sashW / 2,
+              botY + glH - sw / 2,
+              sashZ,
+            ),
+          );
+          g.add(
+            box(sashW, sw, sashD, fmat, sx0 + sashW / 2, botY + sw / 2, sashZ),
+          );
           g.add(box(sw, glH, sashD, fmat, sx0 + sw / 2, glCY, sashZ));
           g.add(box(sw * 1.3, glH, sashD, fmat, sx1 - sw * 0.65, glCY, sashZ));
         }
         if (hasKneewall) {
-          const kmat =
-            unit.kneewall_mat === "solid"
-              ? solidMat(0xc8bcaa)
-              : glassMat(0x2b4754, 0.8);
+          const isSolidKnee = unit.kneewall_mat === "solid";
+          const kmat = isSolidKnee
+            ? kneewallMat(unit.kneewall_solid_style)
+            : glassMat(0x2b4754, 0.8);
           g.add(box(w, fw, D * 1.2, fmat, w / 2, kH + fw / 2, 0));
-          g.add(box(w - fw * 2, kH, D, kmat, w / 2, kH / 2, 0));
+          // A SOLID kneewall runs the FULL unit width (not inset by the frame) and
+          // stands proud (deeper), so adjacent units' skirts abut into one
+          // continuous band and cover the thin per-unit side stiles behind them —
+          // solid kneewalls read as one piece across units (buildWall also stops
+          // the between-unit post above them). Glass kneewalls stay framed per unit.
+          g.add(
+            box(
+              isSolidKnee ? w : w - fw * 2,
+              kH,
+              isSolidKnee ? 0.16 : D,
+              kmat,
+              w / 2,
+              kH / 2,
+              0,
+            ),
+          );
+          // Lap-siding courses on a solid kneewall (vinyl/hardieboard). Full width
+          // so the lines stay continuous across the abutting skirts; drawn proud of
+          // the 0.16 skirt so they read.
+          if (isSolidKnee)
+            for (const y of lapCourseYs(unit.kneewall_solid_style, 0, kH))
+              g.add(
+                box(
+                  w,
+                  0.08,
+                  0.18,
+                  seamMat(unit.kneewall_solid_style),
+                  w / 2,
+                  y,
+                  0,
+                ),
+              );
+          // Split kneewall: a center mullion divides the band into two panes
+          // (per-wall toggle, matches the 2D configurator). Drawn proud so it reads
+          // over the solid kneewall skirt and on the mirrored front wall.
+          if (splitKneewall) g.add(box(fw, kH, 0.2, fmat, w / 2, kH / 2, 0));
         }
         g.add(frameBorder(w, h, D * 1.4, fw, fmat, true)); // skip top rail (wall provides it)
         return g;
@@ -469,16 +673,59 @@
       // whose correctness depends on which side of the glass it sits on (the dark
       // gable backing) must consult this. Frame members avoid it by being centred
       // on the glass plane and deeper than it, so they stand proud on both faces.
-      function buildWall(wall, fc, roofStyle, shHex, isGable, includeGableWings = true, mirrored = false, screenOpts = null, hasWing = false) {
+      // gablePaneDividers — x-positions of the vertical mullions splitting a
+      // gable/wing face into `count` panes. Panes == units → the actual unit
+      // divider Xs (1:1 aligned, so the mullions run continuously up from the
+      // frames below, even with uneven unit widths). Panes != units → EVEN
+      // symmetric spacing across the width (i/count). Even spacing is always
+      // symmetric; a strict unit-line subset can't be (an odd pane count on an
+      // even number of unit lines has no centred choice). 1 pane → none. The 2D
+      // GableGlassShape (WallBuilder) mirrors this rule so preview == composite.
+      function gablePaneDividers(dividers, wallW, gableGlass) {
+        const internal = (dividers || []).filter(
+          (x) => x > 0.05 && x < wallW - 0.05,
+        );
+        const paneCount = Math.max(
+          1,
+          parseInt(gableGlass && gableGlass.count) || 1,
+        );
+        const k = paneCount - 1;
+        if (k <= 0) return [];
+        if (k === internal.length) return internal; // panes == units → aligned
+        return Array.from(
+          { length: k },
+          (_, i) => (wallW / paneCount) * (i + 1),
+        );
+      }
+
+      function buildWall(
+        wall,
+        fc,
+        roofStyle,
+        shHex,
+        isGable,
+        includeGableWings = true,
+        mirrored = false,
+        screenOpts = null,
+        hasWing = false,
+      ) {
         const g = new THREE.Group();
-        const fw = wall.frame_width_in / 12,
+        // structFw = the real frame width (from the wall system) — KEPT for the
+        // structural members: between-unit posts, corner posts, and the unit↔gable
+        // top rail. fw = a thin ~2in "sliver" used for the COSMETIC frames the user
+        // wants skinny: window panel frames + insets and the bottom perimeter rail.
+        const structFw = wall.frame_width_in / 12,
+          fw = Math.min(structFw, 2 / 12),
           wallW = wall.width_in / 12,
           wallH = wall.height_in / 12;
         // Screen-room transom on a gable/wing wall: that height is EATEN OFF THE
         // TOP of the wall and drawn as the flat base of the gable/wing shape, so
         // the structure's total height and the roof stay put — the units below
         // just stop lower. 0 on every other wall (normal in-cell transom band).
-        const flatH = Math.max(0, Math.min((wall.gable_flat_in || 0) / 12, wallH * 0.5));
+        const flatH = Math.max(
+          0,
+          Math.min((wall.gable_flat_in || 0) / 12, wallH * 0.5),
+        );
         const unitH = wallH - flatH;
         const fmat = frameMat(fc);
         const isScreenWall = (wall.units || []).some((u) =>
@@ -487,15 +734,40 @@
         let curX = fw;
         const dividers = []; // x of each frame BETWEEN units, for gable alignment
         const unitSpans = []; // {x0, x1, isDoor} — for skirt/rail gaps at doors
+        const kneeInfo = []; // per unit: solid kneewall + its wall-coord top Y
         for (const unit of wall.units) {
           const uw = unit.width_in / 12;
-          const panel = buildPanel(unit, uw, unitH - fw * 2, fw, fc, mirrored);
+          const panel = buildPanel(
+            unit,
+            uw,
+            unitH - fw * 2,
+            fw,
+            fc,
+            mirrored,
+            wall.split_transom,
+            wall.split_kneewall,
+          );
           panel.position.set(curX, fw, 0);
           g.add(panel);
           unitSpans.push({
             x0: curX,
             x1: curX + uw,
             isDoor: (unit.panel_type || "").includes("door"),
+          });
+          const hasKnee = [
+            "fixed_kneewall",
+            "fixed_tk",
+            "oper_kneewall",
+            "oper_tk",
+          ].includes(unit.panel_type);
+          const kH =
+            unit.kneewall_h_in > 0
+              ? unit.kneewall_h_in / 12
+              : (unitH - fw * 2) * 0.22;
+          // Wall-coord top of the kneewall: panel offset (fw) + fill (kH) + cap (fw).
+          kneeInfo.push({
+            solid: hasKnee && unit.kneewall_mat === "solid",
+            top: fw + kH + fw,
           });
           curX += uw;
           dividers.push(curX);
@@ -505,28 +777,83 @@
         // vertical post where two units meet, distinct from the thin sash bar
         // inside an operable window (that one stays fw*0.4 in buildPanel). Drawn
         // proud (forward z) so Canny reads a bold post, not a hairline.
-        const postW = fw * 3.0; // wider than the ~2*fw band the panel edges make
+        const postW = kingPostW(structFw); // structural between-unit posts (kept thick, not the thin cosmetic fw)
+        // The center king post (continues up to the gable peak) is drawn skinnier
+        // than it used to be (was fw*4.8). All-season (6" frame) stays a touch
+        // thicker than three-season (4" frame) — keyed off the frame width. Keep
+        // buildGable's king mullion at the SAME width so they read as one member.
+        const kingW = kingPostW(structFw); // king post (kept thick) — see kingPostW at top of script
         // On the gable end, the post that continues up to the peak is a beefier
         // structural king post — thicker than the other between-unit posts. Pick
         // the divider nearest the wall centre; buildGable picks the same one so
         // the thick post and its gable mullion line up into one continuous member.
-        const kingDx =
-          isGable && roofStyle === "gable" && dividers.length
-            ? dividers.reduce((a, b) =>
-                Math.abs(b - wallW / 2) < Math.abs(a - wallW / 2) ? b : a,
-              )
-            : null;
-        for (const dx of dividers) {
-          const pw = dx === kingDx ? fw * 4.8 : postW;
-          g.add(box(pw, unitH - fw * 2, 0.16, fmat, dx, unitH / 2, 0.03));
-        }
+        // King post = the drawn GABLE mullion nearest centre — the same subset
+        // buildGable draws, so the thick post and its gable mullion stay one
+        // continuous member even when the pane count is below the unit count.
+        const kingChosen =
+          isGable && roofStyle === "gable"
+            ? gablePaneDividers(dividers, wallW, wall.gable_glass)
+            : [];
+        const kingDx = kingChosen.length
+          ? kingChosen.reduce((a, b) =>
+              Math.abs(b - wallW / 2) < Math.abs(a - wallW / 2) ? b : a,
+            )
+          : null;
+        dividers.forEach((dx, i) => {
+          const pw = dx === kingDx ? kingW : postW;
+          // A solid kneewall stays one continuous piece across units, so the
+          // between-unit post stops at its top instead of splitting it. Only when
+          // BOTH adjacent units have a solid kneewall (glass kneewalls keep the
+          // full-height post between their framed panes).
+          const a = kneeInfo[i],
+            b = kneeInfo[i + 1];
+          const bottom =
+            a && b && a.solid && b.solid ? Math.max(a.top, b.top) : fw;
+          const top = unitH - fw;
+          const ph = top - bottom;
+          if (ph > 0.05)
+            g.add(box(pw, ph, 0.16, fmat, dx, (bottom + top) / 2, 0.03));
+        });
         // Under-existing skips the wall's own top rail: the eave header beam
         // (drawn thin below) is the single top member there, so they don't stack
         // into a chunky band at the roofline (user asked to thin the top frame,
         // 2026-07-21). Every other roof style keeps the normal top rail.
-        // Top rail lands at unitH — under a gable/wing flat base that IS the
-        // transom rail dividing the units from the flat band above them.
-        g.add(frameBorder(wallW, unitH, 0.12, fw, fmat, roofStyle === "under_existing"));
+        // Top rail lands at the units' top (unitH). On a gable/wing wall that IS the
+        // transom line dividing the units from the flat base above them.
+        // Wall outer frame — split so the "2in sliver" applies to the BOTTOM
+        // perimeter rail (thin fw) while the unit↔gable TOP rail and the two corner
+        // mullions keep their structural width (structFw), per the user's keeps.
+        g.add(box(wallW, fw, 0.12, fmat, wallW / 2, fw / 2, 0)); // bottom perimeter — thin
+        if (roofStyle !== "under_existing")
+          g.add(
+            box(
+              wallW,
+              structFw,
+              0.12,
+              fmat,
+              wallW / 2,
+              unitH - structFw / 2,
+              0,
+            ),
+          ); // top rail
+        g.add(box(structFw, unitH, 0.12, fmat, structFw / 2, unitH / 2, 0)); // left corner mullion
+        g.add(
+          box(structFw, unitH, 0.12, fmat, wallW - structFw / 2, unitH / 2, 0),
+        ); // right corner mullion
+
+        // Pentagon corner posts: on a gable/wing wall whose glass grows DOWN into a
+        // flat base, the wall frame above stops at unitH. Run the two corner posts on
+        // up the flat base's vertical side edges to the eave shoulder (wallH), so the
+        // FRAMED corner reaches the top marker instead of ending a flat-height below
+        // it at the units. (The pentagon glass already reaches the shoulder; this
+        // just frames its vertical sides, as a real corner post does.)
+        if (flatH > 0) {
+          const cy = (unitH + wallH) / 2;
+          g.add(box(structFw, flatH, 0.16, fmat, structFw / 2, cy, 0.03)); // corner post — structural
+          g.add(
+            box(structFw, flatH, 0.16, fmat, wallW - structFw / 2, cy, 0.03),
+          );
+        }
 
         // ── Screen-room horizontals ────────────────────────────────────────────
         // Kneewall, chairrail and handrail span the WHOLE wall (they're configured
@@ -546,18 +873,31 @@
             else segs.push({ x0: s.x0, x1: s.x1 });
           }
           const segList = segs
-            .map((s) => ({ w: s.x1 - s.x0, cx: (s.x0 + s.x1) / 2, x0: s.x0, x1: s.x1 }))
+            .map((s) => ({
+              w: s.x1 - s.x0,
+              cx: (s.x0 + s.x1) / 2,
+              x0: s.x0,
+              x1: s.x1,
+            }))
             .filter((s) => s.w > 1e-3);
 
+          // Fit factor: screen rails are absolute inches; scale them so they hold
+          // the same proportion in the fitted wall that the 2D shows (see
+          // screenOpts.hScale where it's set). 1 when there's no auto-fit.
+          const hs = screenOpts.hScale || 1;
           const kn = screenOpts.kneewall;
           if (kn && kn.enabled) {
-            const kH = (parseFloat(kn.heightIn) || 0) / 12 || wallH * 0.22;
+            // Scale the absolute typed height by the fit; the proportional fallback
+            // (wallH*0.22) is already relative to the fitted wall, so leave it.
+            const knIn = parseFloat(kn.heightIn) || 0;
+            const kH = knIn > 0 ? (knIn / 12) * hs : wallH * 0.22;
             const style = kn.solidStyle || "panel";
             const kmat = kneewallMat(style);
             // Lap/board reveal: vinyl 4in, hardieboard 8in, panel = smooth (none).
             // A darker seam line at each reveal so Canny reads the siding courses —
             // 4in gives twice as many lines as 8in, the visible vinyl↔hardie tell.
-            const boardFt = style === "vinyl" ? 4 / 12 : style === "hardieboard" ? 8 / 12 : 0;
+            const boardFt =
+              style === "vinyl" ? 4 / 12 : style === "hardieboard" ? 8 / 12 : 0;
             // Bold, dark seam lines — the shadow under each lap board — so Canny
             // has a hard edge to trace and FLUX paints the courses. VINYL needs
             // MORE contrast than hardieboard, not the same: its base is near-white,
@@ -580,7 +920,9 @@
 
           const cr = screenOpts.chairrail;
           if (cr && cr.enabled) {
-            const cH = (parseFloat(cr.heightIn) || 0) / 12 || wallH * 0.45;
+            // Scale the absolute typed height by the fit; proportional fallback as-is.
+            const crIn = parseFloat(cr.heightIn) || 0;
+            const cH = crIn > 0 ? (crIn / 12) * hs : wallH * 0.45;
             for (const s of segList) {
               g.add(box(s.w, fw * 1.2, 0.17, fmat, s.cx, cH, 0));
             }
@@ -589,7 +931,8 @@
           // Handrail trumps chairrail in the configurator (setScreenHandrail), so
           // both never render together. ~36" top rail over evenly spaced pickets.
           if (screenOpts.handrail && screenOpts.handrail.enabled) {
-            const hH = 3.0; // ~36in top rail
+            const hH = 3.0 * hs; // ~36in top rail (scaled to the fitted wall)
+            const botR = 0.4 * hs; // bottom rail height (scaled)
             const gap = 0.33; // ~4in on-center baluster spacing (was 5.4in)
             const pW = fw * 0.28; // THIN balusters (was fw*0.5) — read as behind-screen
             // Only slightly proud of the screen (depth 0.09 vs the screen's 0.07),
@@ -599,16 +942,35 @@
             // touch proud on both faces (mirror-safe).
             for (const s of segList) {
               g.add(box(s.w, fw * 0.8, 0.09, fmat, s.cx, hH, 0)); // thin top rail
-              g.add(box(s.w, fw * 0.55, 0.09, fmat, s.cx, 0.4, 0)); // thin bottom rail
-              for (let px = s.x0 + gap * 0.5; px < s.x1 - gap * 0.25; px += gap) {
-                g.add(box(pW, hH - 0.4, 0.09, fmat, px, 0.4 + (hH - 0.4) / 2, 0));
+              g.add(box(s.w, fw * 0.55, 0.09, fmat, s.cx, botR, 0)); // thin bottom rail
+              for (
+                let px = s.x0 + gap * 0.5;
+                px < s.x1 - gap * 0.25;
+                px += gap
+              ) {
+                g.add(
+                  box(pW, hH - botR, 0.09, fmat, px, botR + (hH - botR) / 2, 0),
+                );
               }
             }
           }
         }
 
         if (isGable && roofStyle === "gable")
-          g.add(buildGable(wallW, wallH, fw, shHex, wall.gable_glass, fc, dividers, mirrored, isScreenWall, flatH));
+          g.add(
+            buildGable(
+              wallW,
+              wallH,
+              fw,
+              shHex,
+              wall.gable_glass,
+              fc,
+              dividers,
+              mirrored,
+              isScreenWall,
+              flatH,
+            ),
+          );
 
         // Studio: the SIDE wall (A/C) carries the triangular WING under the shed
         // slope; the FRONT wall (B) sits at the low eave and gets nothing. WHICH
@@ -616,7 +978,20 @@
         // sites. Gating this on `!mirrored` put the wing on wall B for every BC
         // capture (user report 2026-07-27).
         if (hasWing)
-          g.add(buildWing(wallW, wallH, fw, shHex, wall.gable_glass, fc, dividers, isScreenWall, flatH, mirrored));
+          g.add(
+            buildWing(
+              wallW,
+              wallH,
+              fw,
+              shHex,
+              wall.gable_glass,
+              fc,
+              dividers,
+              isScreenWall,
+              flatH,
+              mirrored,
+            ),
+          );
 
         // Under-existing: wall panels rise to the eave (wallH = the header). Above
         // that, the area up to the EXISTING roof is filled — drawn tall and clipped
@@ -640,11 +1015,43 @@
           if (includeGableWings) {
             const gg = wall.gable_glass;
             const isSolid = !!gg && gg.glassType === "solid";
-            const fillMat = isSolid ? solidMat(0xdcd0be) : contMat;
-            g.add(box(wallW - fw * 2, fillH, Df, fillMat, wallW / 2, wallH + fillH / 2, 0));
+            const fillMat = isSolid
+              ? kneewallMat(gg.solidStyle || "panel")
+              : contMat;
+            g.add(
+              box(
+                wallW - fw * 2,
+                fillH,
+                Df,
+                fillMat,
+                wallW / 2,
+                wallH + fillH / 2,
+                0,
+              ),
+            );
+            // Lap-siding courses on a solid under-existing infill (clipped to the
+            // roofline in post like the fill itself).
+            if (isSolid) {
+              const style = gg.solidStyle || "panel";
+              const sm = seamMat(style);
+              for (const y of lapCourseYs(style, wallH, wallH + fillH))
+                g.add(
+                  box(wallW - fw * 2, 0.08, Df + 0.04, sm, wallW / 2, y, 0),
+                );
+            }
           } else {
             // Walls-only: seamless continuation, no accent above the header.
-            g.add(box(wallW - fw * 2, fillH, Df, contMat, wallW / 2, wallH + fillH / 2, 0));
+            g.add(
+              box(
+                wallW - fw * 2,
+                fillH,
+                Df,
+                contMat,
+                wallW / 2,
+                wallH + fillH / 2,
+                0,
+              ),
+            );
           }
           // Single SLIM header beam at the eave, both flavours (replaces the
           // skipped wall top rail). Was fw*1.4 and stacked on the top rail — a
@@ -664,7 +1071,18 @@
         return g;
       }
 
-      function buildGable(wallW, wallH, fw, shHex, gableGlass, fc, dividers, mirrored = false, isScreen = false, flatH = 0) {
+      function buildGable(
+        wallW,
+        wallH,
+        fw,
+        shHex,
+        gableGlass,
+        fc,
+        dividers,
+        mirrored = false,
+        isScreen = false,
+        flatH = 0,
+      ) {
         const g = new THREE.Group();
         const gH = ROOF_RISE > 0 ? ROOF_RISE : wallH * 0.42,
           peakX = wallW / 2,
@@ -683,7 +1101,6 @@
         // glass made the gable read light/blue against black screen walls below.
         const glassType = gableGlass && gableGlass.glassType;
         const isGlass = !!gableGlass && glassType !== "solid";
-        const paneCount = Math.max(1, parseInt(gableGlass && gableGlass.count) || 1);
 
         const shape = new THREE.Shape();
         shape.moveTo(0, baseY);
@@ -701,12 +1118,32 @@
             ? screenMat()
             : glassMat(0x2b4754, 0.8)
           : gableGlass && glassType === "solid"
-            ? solidMat(0xc8bcaa)
+            ? kneewallMat(gableGlass.solidStyle || "panel")
             : shingleMat(shHex);
         const face = new THREE.Mesh(new THREE.ShapeGeometry(shape), faceMat);
         face.position.z = 0.05;
         face.castShadow = true;
         g.add(face);
+
+        // Lap-siding courses on a SOLID gable (vinyl/hardieboard), each clipped to
+        // the gable's width at that height: full across the flat base, narrowing up
+        // the triangle to the peak. Same z/depth as the gable mullions so they read
+        // on both faces of the mirrored front wall. A SOLID gable is a real siding
+        // panel (kneewallMat), not screen mesh, so the courses draw even in a screen
+        // room — the old `!isScreen` guard wrongly left screen solid gables flat
+        // (vinyl/hardieboard indistinguishable from panel — user report).
+        if (glassType === "solid") {
+          const style = gableGlass.solidStyle || "panel";
+          const sm = seamMat(style);
+          for (const y of lapCourseYs(style, baseY, peakY)) {
+            const halfW =
+              flatH > 0 && y <= wallH
+                ? wallW / 2
+                : peakX * (1 - (y - wallH) / (peakY - wallH));
+            const cw = halfW * 2 - fw * 2;
+            if (cw > 0.1) g.add(box(cw, 0.08, 0.12, sm, wallW / 2, y, 0.05));
+          }
+        }
 
         // Dark backing behind a GLASS gable so it shows a dark interior instead of
         // the roof/sky behind it (the interior occluder box only reaches the wall
@@ -727,7 +1164,10 @@
             // is backface-culled there and the backing vanishes entirely — the
             // roof slope and sky bleed through the gable glass. Same reason
             // shingleMat is DoubleSide.
-            new THREE.MeshBasicMaterial({ color: 0x171c1f, side: THREE.DoubleSide }),
+            new THREE.MeshBasicMaterial({
+              color: 0x171c1f,
+              side: THREE.DoubleSide,
+            }),
           );
           // And it must sit on the far side of the glass FROM THE CAMERA. Local -z
           // is "behind" only on the un-mirrored side wall; the mirrored front wall
@@ -740,40 +1180,37 @@
 
         const fmat = frameMat(fc);
 
-        // Glass gable mullions. ALIGN them to the wall's unit dividers so the
-        // verticals run continuously from the units up into the gable. The old
-        // code divided the full width evenly from 0, but the units start inset by
-        // one frame-width, so the gable mullions sat ~fw off from the unit frames
-        // below — the "gable and unit frames are a little off" stagger. Fall back
-        // to even paneCount division if no dividers were passed.
         const slopeY = (x) =>
           x <= peakX
             ? wallH + (gH / peakX) * x
             : wallH + (gH / peakX) * (wallW - x);
-        let mullionXs = [];
-        if (isGlass && dividers && dividers.length) {
-          mullionXs = dividers.filter((x) => x > 0.05 && x < wallW - 0.05);
-        } else if (isGlass && paneCount > 1) {
-          for (let i = 1; i < paneCount; i++) mullionXs.push((wallW / paneCount) * i);
+        // Gable pane dividers sit DIRECTLY ABOVE the wall's unit dividers, so every
+        // gable mullion lines up with the frame/post beneath it (user request — the
+        // even-by-count spacing drifted off the units). One mullion per wall
+        // divider; the one nearest the peak centre is the beefy king, the rest are
+        // decorative pane dividers. MUST mirror the 2D GableGlassShape (WallBuilder).
+        const gKingW = kingPostW(fw); // one knob — see kingPostW at top of script
+        const gDecorW = fw * 1.4; // decorative pane divider — a bit wider (user req)
+        let mullions = []; // { x, w }
+        if (isGlass) {
+          // Panes == units → every unit divider (1:1 aligned); otherwise → even
+          // symmetric spacing. See gablePaneDividers.
+          const chosen = gablePaneDividers(dividers, wallW, gableGlass);
+          const kingX = chosen.length
+            ? chosen.reduce((a, b) =>
+                Math.abs(b - peakX) < Math.abs(a - peakX) ? b : a,
+              )
+            : null;
+          for (const x of chosen)
+            mullions.push({ x, w: x === kingX ? gKingW : gDecorW });
         }
-        // The mullion running up to the peak is the beefier king post (matches
-        // buildWall's kingDx pick — divider nearest the centre), so the thick post
-        // below and this mullion read as one continuous member up to the peak.
-        const kingMx = mullionXs.length
-          ? mullionXs.reduce((a, b) =>
-              Math.abs(b - peakX) < Math.abs(a - peakX) ? b : a,
-            )
-          : null;
-        for (const mx of mullionXs) {
-          const topY = slopeY(mx);
+        for (const m of mullions) {
+          const topY = slopeY(m.x);
           const h = Math.max(0.05, topY - baseY);
-          // Match the between-unit POST width (fw*3.0 in buildWall) so each
-          // vertical reads as one continuous post from the unit up into the gable.
-          // Depth is CENTRED on the gable face plane (z=0.05) and thicker than it,
-          // so the mullion stands proud on both faces. The front wall is mirrored
-          // (local +z faces away from the camera), so a shallow +z offset would
-          // sink these behind the tinted glass — see the same fix in buildWall.
-          g.add(box(mx === kingMx ? fw * 4.8 : fw * 3.0, h, 0.16, fmat, mx, baseY + h / 2, 0.05));
+          // Depth CENTRED on the gable face plane (z=0.05) and thicker than it, so
+          // the mullion stands proud on both faces — the front wall is mirrored, so
+          // a shallow +z offset would sink these behind the tinted glass.
+          g.add(box(m.w, h, 0.16, fmat, m.x, baseY + h / 2, 0.05));
         }
         // (No separate gable sill — the wall's own top frame rail already sits
         // here. A second bar stacked on it made a double-thick band; one rail
@@ -786,7 +1223,15 @@
         const eMat = isGlass ? fmat : solidMat(darken(shHex, 15));
         const lLen = Math.sqrt(peakX ** 2 + gH ** 2),
           lAng = Math.atan2(gH, peakX);
-        const lEdge = box(lLen, fw * 1.1, D, eMat, peakX / 2, wallH + gH / 2, 0.06);
+        const lEdge = box(
+          lLen,
+          fw * 1.1,
+          D,
+          eMat,
+          peakX / 2,
+          wallH + gH / 2,
+          0.06,
+        );
         lEdge.rotation.z = lAng;
         g.add(lEdge);
         const rEdge = box(
@@ -816,7 +1261,18 @@
         return g;
       }
 
-      function buildWing(wallW, wallH, fw, shHex, gableGlass, fc, dividers, isScreen = false, flatH = 0, mirrored = false) {
+      function buildWing(
+        wallW,
+        wallH,
+        fw,
+        shHex,
+        gableGlass,
+        fc,
+        dividers,
+        isScreen = false,
+        flatH = 0,
+        mirrored = false,
+      ) {
         // Studio shed-roof WING: right-triangle fill between the SIDE wall's top
         // and the sloping roof — rise = wallW*0.08 (matching buildRoof's slope,
         // the side wall's width IS the projection depth) at the HOUSE end,
@@ -856,12 +1312,38 @@
             ? screenMat()
             : glassMat(0x2b4754, 0.8)
           : gableGlass && glassType === "solid"
-            ? solidMat(0xc8bcaa)
+            ? kneewallMat(gableGlass.solidStyle || "panel")
             : shingleMat(shHex);
         const face = new THREE.Mesh(new THREE.ShapeGeometry(shape), faceMat);
         face.position.z = 0.05;
         face.castShadow = true;
         g.add(face);
+
+        // Lap-siding courses on a SOLID wing (vinyl/hardieboard), each clipped to
+        // the wing's width at that height: full across the flat base, then shrinking
+        // toward the low (front eave) end as the shed slope cuts the top corner off.
+        // Solid wing = real siding panel (not screen mesh), so courses draw even in
+        // a screen room (dropped the old `!isScreen` guard — user report: screen
+        // solid wings rendered flat, vinyl/hardieboard indistinguishable).
+        if (glassType === "solid") {
+          const style = gableGlass.solidStyle || "panel";
+          const sm = seamMat(style);
+          console.log(
+            `[scene] wing solid: style=${style} courses=${lapCourseYs(style, baseY, wallH + rise).length}`,
+          );
+          for (const y of lapCourseYs(style, baseY, wallH + rise)) {
+            let x0 = 0,
+              x1 = wallW;
+            if (y > wallH) {
+              const k = (y - wallH) / rise; // 0 at eave → 1 at the high (house) end
+              if (mirrored) x0 = wallW * k;
+              else x1 = wallW * (1 - k);
+            }
+            const cw = x1 - x0 - fw * 2;
+            if (cw > 0.1)
+              g.add(box(cw, 0.08, 0.12, sm, (x0 + x1) / 2, y, 0.05));
+          }
+        }
 
         // Dark backing behind GLASS so the house/sky doesn't bleed through (the
         // interior occluder stops at the wall top — same as the gable backing).
@@ -871,17 +1353,23 @@
         if (isGlass && !isScreen) {
           const back = new THREE.Mesh(
             new THREE.ShapeGeometry(shape),
-            new THREE.MeshBasicMaterial({ color: 0x171c1f, side: THREE.DoubleSide }),
+            new THREE.MeshBasicMaterial({
+              color: 0x171c1f,
+              side: THREE.DoubleSide,
+            }),
           );
           back.position.z = mirrored ? 0.25 : -0.2;
           g.add(back);
         }
 
         const fmat = frameMat(fc);
-        // Verticals continue the unit posts up into the wing (same divider
-        // alignment as buildGable); skip stubs near the front eave.
+        // Wing verticals: 1 pane → none (one continuous wing); otherwise they run
+        // continuously up from the unit dividers below (see gablePaneDividers).
         const slopeY = (x) => wallH + rise * (1 - Math.abs(x - hiX) / wallW);
-        for (const mx of dividers || []) {
+        // Panes == units → align to the unit dividers; otherwise → even symmetric
+        // spacing. Same rule as buildGable (gablePaneDividers).
+        const wingMx = gablePaneDividers(dividers, wallW, gableGlass);
+        for (const mx of wingMx) {
           const h = slopeY(mx) - baseY;
           if (h < 0.18) continue;
           g.add(box(fw * 3.0, h, 0.16, fmat, mx, baseY + h / 2, 0.05));
@@ -894,7 +1382,15 @@
         return g;
       }
 
-      function buildRoof(wallW_B, wallW_C, wallH, roofStyle, shHex, fc, gableOnFront = false) {
+      function buildRoof(
+        wallW_B,
+        wallW_C,
+        wallH,
+        roofStyle,
+        shHex,
+        fc,
+        gableOnFront = false,
+      ) {
         const g = new THREE.Group(),
           fmat = frameMat(fc),
           // Roof overhang (eaves + gable rakes). The product's aluminum roof is
@@ -955,14 +1451,32 @@
           // rake) narrowing to flush with the wall plane at the house side, so
           // the roof dies INTO the house instead of hanging a corner + gutter
           // stub over the bricks (the awkward corners circled 2026-07-13).
-          g.add(quad(rA, rB, [-OH, wallH, z1], [0, wallH, z0], darken(shHex, 25)));
-          g.add(quad(rA, rB, [wallW_C + OH, wallH, z1], [wallW_C, wallH, z0], shHex));
+          g.add(
+            quad(rA, rB, [-OH, wallH, z1], [0, wallH, z0], darken(shHex, 25)),
+          );
+          g.add(
+            quad(
+              rA,
+              rB,
+              [wallW_C + OH, wallH, z1],
+              [wallW_C, wallH, z0],
+              shHex,
+            ),
+          );
           // White fascia boards under the eaves, SLANTED to follow the tapered
           // eave edge (front overhang → flush at the house, z 0..z1).
           const fascia = (xNear, xFar) => {
             const dx = xFar - xNear,
               len = Math.sqrt(dx * dx + z1 * z1),
-              bar = box(0.4, 0.4, len, fmat, (xNear + xFar) / 2, wallH - 0.2, z1 / 2);
+              bar = box(
+                0.4,
+                0.4,
+                len,
+                fmat,
+                (xNear + xFar) / 2,
+                wallH - 0.2,
+                z1 / 2,
+              );
             bar.rotation.y = Math.atan2(dx, z1);
             return bar;
           };
@@ -997,7 +1511,11 @@
             shingleMat(darken(shHex, 25), bcU, bcV),
           );
           rm.rotation.x = -(Math.PI / 2 - pAng);
-          rm.position.set(wallW_C / 2, wallH + gH / 2 - dy, ridgeZ + ridgeZ / 2 + dz);
+          rm.position.set(
+            wallW_C / 2,
+            wallH + gH / 2 - dy,
+            ridgeZ + ridgeZ / 2 + dz,
+          );
           rm.castShadow = rm.receiveShadow = true;
           g.add(rm);
           // No white ridge bar on top — real shingles have none, and it made the
@@ -1005,7 +1523,15 @@
           // hang just BELOW the brown roof eaves (front + house side), giving the
           // overhang depth so the AI doesn't read the roof as flat.
           g.add(
-            box(wallW_C + OH * 2, 0.4, 0.12, fmat, wallW_C / 2, wallH - 0.2, -OH),
+            box(
+              wallW_C + OH * 2,
+              0.4,
+              0.12,
+              fmat,
+              wallW_C / 2,
+              wallH - 0.2,
+              -OH,
+            ),
           );
           g.add(
             box(
@@ -1161,7 +1687,13 @@
       // the line. Returns updated { composite, mask } data URLs.
       // roofline = normalized [[x,y], ...] left->right; ends = back-top corners.
       async function applyUnderExisting(
-        compositeURL, maskURL, photoDataUrl, roofline, photoW, photoH, frameHex,
+        compositeURL,
+        maskURL,
+        photoDataUrl,
+        roofline,
+        photoW,
+        photoH,
+        frameHex,
       ) {
         const pts = roofline.map(([x, y]) => [x * photoW, y * photoH]);
 
@@ -1172,7 +1704,8 @@
           ctx.moveTo(0, 0);
           ctx.lineTo(photoW, 0);
           ctx.lineTo(photoW, pts[pts.length - 1][1]);
-          for (let i = pts.length - 1; i >= 0; i--) ctx.lineTo(pts[i][0], pts[i][1]);
+          for (let i = pts.length - 1; i >= 0; i--)
+            ctx.lineTo(pts[i][0], pts[i][1]);
           ctx.lineTo(0, pts[0][1]);
           ctx.closePath();
         };
@@ -1280,7 +1813,10 @@
           scene.environment = pmrem.fromEquirectangular(SKY_ENV).texture;
           pmrem.dispose();
         } catch (e) {
-          console.warn("[scene] PMREM env failed (glass still reflects via envMap):", e.message);
+          console.warn(
+            "[scene] PMREM env failed (glass still reflects via envMap):",
+            e.message,
+          );
           scene.environment = SKY_ENV;
         }
         await new Promise((res, rej) => {
@@ -1312,7 +1848,8 @@
           const ids = new Set(walls.map((w) => w.wall_id));
           combo = ids.has("A") && !ids.has("C") ? "AB" : "BC";
         }
-        const pick = (id, idx) => walls.find((w) => w.wall_id === id) || walls[idx];
+        const pick = (id, idx) =>
+          walls.find((w) => w.wall_id === id) || walls[idx];
         let bSpec, cSpec;
         if (singleWall) {
           bSpec = pick("B", 0);
@@ -1340,13 +1877,32 @@
         // Use the PnP-fitted height so the structure seats on the patio. Falls
         // back to the configured height if auto-fit wasn't provided.
         let wallH = camera.solvedHeight || configuredWallH;
+        // Fit factor: how much the PnP auto-height grew/shrank the wall vs the
+        // configured height. EVERY vertical dimension must be multiplied by this or
+        // it drifts off-proportion in the fitted wall (=1 when there's no fit). Used
+        // for the unit transom/kneewall (scaleSpec below), the gable rise, AND the
+        // structure-wide SCREEN rails (kneewall/chairrail/handrail) — those live in
+        // screenOpts, not the specs, so they're scaled via screenOpts.hScale in
+        // buildWall instead of here (they were the ones left unscaled: a 36in
+        // chairrail sat at 3.0ft absolute in a 7.85ft-fitted 7ft wall → 38% instead
+        // of the configured 43%, i.e. "way shorter" than the 2D — user report).
+        const hScale = configuredWallH > 0 ? wallH / configuredWallH : 1;
         // CRITICAL: buildWall reads wall.height_in internally, so override both
         // wall specs to the fitted height — otherwise the walls stay at the
         // configured height while the roof sits at the fitted height, and they
         // visibly disconnect.
         if (camera.solvedHeight) {
-          if (bSpec) bSpec.height_in = wallH * 12;
-          if (cSpec) cSpec.height_in = wallH * 12;
+          const scaleSpec = (spec) => {
+            if (!spec) return;
+            spec.height_in = wallH * 12;
+            if (spec.gable_flat_in) spec.gable_flat_in *= hScale;
+            for (const u of spec.units || []) {
+              if (u.transom_h_in) u.transom_h_in *= hScale;
+              if (u.kneewall_h_in) u.kneewall_h_in *= hScale;
+            }
+          };
+          scaleSpec(bSpec);
+          scaleSpec(cSpec);
         }
         // Roof rise above the eave, from the configured mountHeight (ground →
         // peak / wing-top). Scaled by the same factor the PnP auto-fit applied to
@@ -1354,11 +1910,36 @@
         // otherwise a fitted-taller structure gets a roof that's relatively flat.
         // 0 (no mountHeight, or one at/below the wall height) leaves every
         // consumer on its old hardcoded default.
+        // mountHeight is an ABSOLUTE ground→peak measurement, so pin the peak
+        // there above the FITTED eave (rise = mountH − wallH). The old code
+        // scaled the configured rise by the auto-fit factor (wallH/configuredWallH)
+        // — but since auto-height consistently seats the wall a touch SHORTER than
+        // entered, that shrank the whole peak to mountH×hScale, i.e. ~0.5-1ft too
+        // low (error grows with height, so the walls looked fine but the peak was
+        // off). Pinning to mountH keeps the total height on-spec; the eave still
+        // seats on the markers, so only the peak moves. Guarded so a wall fitted
+        // taller than the configured peak can't make a negative rise.
         const mountH = (roof.mount_height_in || 0) / 12;
-        ROOF_RISE =
-          mountH > configuredWallH && configuredWallH > 0
-            ? (mountH - configuredWallH) * (wallH / configuredWallH)
-            : 0;
+        // Gable rise above the eave = the CONFIGURED rise (mountH − configuredWallH)
+        // SCALED by the same factor the fit applied to the wall. auto-height is
+        // DEGENERATE — a wall projects to the same pixels at many world heights, so
+        // the fitted wallH (e.g. 6.49ft for an 8ft config) is NOT a trustworthy
+        // absolute. Pinning the peak to the absolute mount (mountH − wallH) therefore
+        // INFLATES the gable when the fit shrinks the wall: a 6.49ft eave + a peak
+        // nailed to 10ft drew a 3.51ft triangle (54% of the wall) instead of the
+        // designed 2ft (25%) — the "gable way too tall" report. Scaling by hScale
+        // keeps the gable in the SAME proportion to the wall the user drew in 2D, so
+        // it projects correctly whichever degenerate height the solver picked —
+        // whether the fit shrank OR grew the wall. (The "peak too low" worry that
+        // once replaced this measured the absolute peak number against a mount the
+        // fit had already abandoned for the walls; the projection was never low.)
+        const riseScale = configuredWallH > 0 ? wallH / configuredWallH : 1;
+        ROOF_RISE = Math.max(0, mountH - configuredWallH) * riseScale;
+        console.log(
+          `[scene] mount: mount_height_in=${roof.mount_height_in} mountH=${mountH.toFixed(2)}ft ` +
+            `wallH(fitted)=${wallH.toFixed(2)}ft configWallH=${configuredWallH.toFixed(2)}ft → ` +
+            `ROOF_RISE=${ROOF_RISE.toFixed(2)}ft peak=${(wallH + ROOF_RISE).toFixed(2)}ft`,
+        );
         const fc = fcHex(frameColour);
         const roofStyle = roof.style;
         // Under-existing: no NEW roof — walls rise to the EXISTING house roof.
@@ -1451,6 +2032,11 @@
         // Screen rooms: structure-wide kneewall / chairrail / handrail. Null for
         // every other product line, in which case buildWall draws none of them.
         const screenOpts = payload.screenOptions || null;
+        // Screen rails (kneewall/chairrail/handrail) are absolute inches drawn
+        // against the FITTED wall, so scale them by the fit factor like every other
+        // vertical dim (buildWall reads this). Structure-wide → carried on the
+        // shared screenOpts object rather than per-spec.
+        if (screenOpts) screenOpts.hScale = hScale;
 
         // Studio shed: the WING belongs to the wall that runs house→front (a side
         // wall, A or C), never to the front wall B. In the AB frame that's the
@@ -1458,18 +2044,164 @@
         // same flip buildRoof's studio branch makes. gableOnFront ⇔ AB frame.
         const studioWing = roofStyle === "studio";
 
+        // ── Continuous header: pin the gable/wing base to the straight wall's
+        // transom line ──────────────────────────────────────────────────────────
+        // The gable/wing wall runs PLAIN glass up to its flat base; the straight
+        // wall's glass ends at its transom sill. For the top-of-glass frame to be
+        // continuous around the corner, the flat base must sit at the SAME height as
+        // that transom sill. So the flat = the straight wall's transom height (+ one
+        // frame width, since the two rails otherwise sit fw apart). Computed HERE,
+        // off the transom the renderer actually draws — the typed height OR its 18%
+        // fallback — because the frontend can't see the fallback and was sending a
+        // wrong/zero flat. (Assumes the gable/wing wall has no transom of its own,
+        // which is the configurator's normal case.)
+        {
+          const carrier =
+            roofStyle === "gable"
+              ? gableOnFront
+                ? cSpec
+                : bSpec
+              : roofStyle === "studio"
+                ? gableOnFront
+                  ? bSpec
+                  : cSpec
+                : null;
+          const straight =
+            roofStyle === "gable"
+              ? gableOnFront
+                ? bSpec
+                : cSpec
+              : roofStyle === "studio"
+                ? gableOnFront
+                  ? cSpec
+                  : bSpec
+                : null;
+          if (carrier && straight) {
+            const DOOR_H_FT = 7; // matches WallBuilder's DOOR_HEIGHT_FT
+            // The GABLE WALL'S OWN panel types decide the shape — the SAME signal
+            // the 2D preview uses (`wallHasTransom` → `transomAbsorbs`), so 2D and
+            // 3D finally agree (user-confirmed rule). A unit is a transom unit by
+            // its PANEL TYPE (…_t / …_tk); do NOT test `transom_h_in`, which the
+            // global default populates even on non-transom units — reading it was
+            // the whole "carrier always looks like it has a transom" flip-flop.
+            const isTransomUnit = (u) => {
+              const pt = u.panel_type || "";
+              return pt.endsWith("_t") || pt.endsWith("_tk");
+            };
+            // Deepest DRAWN transom height (ft) on a wall: typed max on its transom
+            // units, else the renderer's 18% fallback (what buildPanel draws), else 0.
+            const wallTransomFt = (wall) => {
+              const us = (wall.units || []).filter(isTransomUnit);
+              if (!us.length) return 0;
+              const typed = us
+                .map((u) => u.transom_h_in || 0)
+                .filter((t) => t > 0);
+              if (typed.length) return Math.max(...typed) / 12;
+              const fwFt = (wall.frame_width_in || 0) / 12;
+              return (wallH - fwFt * 2) * 0.18;
+            };
+            // Rule (user-confirmed):
+            //   A. Gable wall HAS its own transom → flat 0 = TRIANGLE. Its units
+            //      draw their transom band normally (same height as the other walls).
+            //   B. No gable transom, the STRAIGHT wall has one → PENTAGON, flat = that
+            //      transom height so the gable's glass-top lands on the transom sill
+            //      around the corner (no unit transom on the gable wall to double).
+            //   C. No transom anywhere → PENTAGON from excess wall height above a 7ft
+            //      door line (mirrors the 2D's `excessFt`).
+            let flatFt, why;
+            // SCREEN ROOMS (2_inch) use a simpler rule than glass (user 2026-08-12):
+            // a pentagon flat appears ONLY when the REFERENCE wall has a transom,
+            // and the flat = that transom's specified height (NO +fw, NO excess-
+            // height fallback, NO ≤7ft special-case). Reference = `straight`: for a
+            // GABLE that's the straight side wall ("the other walls"); for a WING
+            // `straight` is always the B wall. Glass rooms fall through to the
+            // unchanged A/B/C chain below.
+            const isScreenSpec = (s) =>
+              (((s && s.units) || []).some((u) =>
+                (u.panel_type || "").startsWith("screen"),
+              ));
+            if (isScreenSpec(carrier) || isScreenSpec(straight)) {
+              const refT = wallTransomFt(straight);
+              flatFt = refT > 0 ? refT : 0;
+              why =
+                refT > 0
+                  ? "screen: reference-wall transom → pentagon (flat = transom h)"
+                  : "screen: no reference-wall transom → triangle";
+            } else if (configuredWallH <= DOOR_H_FT) {
+              // A 7ft-or-shorter wall is ALWAYS a plain triangle, transom or not:
+              // there's no excess height above a 7ft door line to grow a flat into.
+              // The 2D enforces this (its excessFt = max(0, wallH-7) = 0 → triangle).
+              // MUST use the CONFIGURED height, not the PnP-fitted `wallH` — the fit
+              // drifts a few inches above 7 and was spuriously firing the excess-
+              // pentagon on a configured-7ft no-transom wall (user report). This is
+              // the FIRST check, so it changes NOTHING for any >7ft config — no
+              // regression to the triangle / borrow-pentagon / excess cases below.
+              flatFt = 0;
+              why = "wall ≤7ft → always triangle";
+            } else if (carrier.units && carrier.units.some(isTransomUnit)) {
+              // Gable/wing wall has its OWN transom → that transom IS its top-of-
+              // glass header, so draw a plain TRIANGLE on it (flat 0). Reverted the
+              // wallH−7−transom flat + the straight-wall solid band (user request).
+              flatFt = 0;
+              why = "gable wall has its own transom → triangle";
+            } else {
+              const otherT = wallTransomFt(straight);
+              if (otherT > 0) {
+                // + one frame width: the gable's flat-base TOP RAIL and the
+                // straight wall's transom SILL RAIL otherwise sit ~fw apart, so the
+                // header doesn't line up around the corner (the gable base rides one
+                // rail-height high — user report). This +fw was the previously-
+                // working value; restoring it. Affects ONLY this branch (a gable
+                // wall with no transom that borrows the straight wall's) — the
+                // triangle (flat 0) and excess-height branches are untouched.
+                const fwFt = (straight.frame_width_in || 0) / 12;
+                flatFt = otherT + fwFt;
+                why =
+                  "no gable transom → pentagon on straight-wall transom (+fw)";
+              } else {
+                flatFt = Math.max(0, wallH - DOOR_H_FT);
+                why = "no transom anywhere → pentagon from excess height";
+              }
+            }
+            carrier.gable_flat_in = flatFt * 12;
+            console.log(
+              `[scene] header-align: carrier=${carrier.wall_id} → flat=${carrier.gable_flat_in.toFixed(1)}in (${why})`,
+            );
+          }
+        }
+
         if (singleWall) {
           // Flat nook-fill wall: draw wall B in the z=0 plane facing the camera.
           // No rotation (local +z faces the camera), no side wall, no gable — the
           // opening's top edge IS the wall top. roofStyle forced to a plain style
           // so buildWall skips the gable/wing/under-existing fill above the units.
-          const flat = buildWall(bSpec, fc, "gable", shHex, false, includeGableWings, false, screenOpts, false);
+          const flat = buildWall(
+            bSpec,
+            fc,
+            "gable",
+            shHex,
+            false,
+            includeGableWings,
+            false,
+            screenOpts,
+            false,
+          );
           flat.position.set(0, 0, 0);
           sunroom.add(flat);
         } else {
           if (bSpec) {
             // Side wall: plain rotation, local +z stays on the camera side.
-            const wallB = buildWall(bSpec, fc, roofStyle, shHex, !gableOnFront, includeGableWings, false, screenOpts, studioWing && gableOnFront);
+            const wallB = buildWall(
+              bSpec,
+              fc,
+              roofStyle,
+              shHex,
+              !gableOnFront,
+              includeGableWings,
+              false,
+              screenOpts,
+              studioWing && gableOnFront,
+            );
             wallB.rotation.y = -Math.PI / 2;
             wallB.position.set(0, 0, 0);
             sunroom.add(wallB);
@@ -1477,7 +2209,17 @@
 
           if (cSpec) {
             // Front wall: rotation.y=PI + scale.x=-1 ⇒ z-flip, so it's `mirrored`.
-            const wallC = buildWall(cSpec, fc, roofStyle, shHex, gableOnFront, includeGableWings, true, screenOpts, studioWing && !gableOnFront);
+            const wallC = buildWall(
+              cSpec,
+              fc,
+              roofStyle,
+              shHex,
+              gableOnFront,
+              includeGableWings,
+              true,
+              screenOpts,
+              studioWing && !gableOnFront,
+            );
             wallC.rotation.y = Math.PI;
             wallC.scale.x = -1;
             wallC.position.set(0, 0, wallW_B);
@@ -1486,7 +2228,17 @@
         }
 
         if (!underExisting && !singleWall)
-          sunroom.add(buildRoof(wallW_B, wallW_C, wallH, roofStyle, shHex, fc, gableOnFront));
+          sunroom.add(
+            buildRoof(
+              wallW_B,
+              wallW_C,
+              wallH,
+              roofStyle,
+              shHex,
+              fc,
+              gableOnFront,
+            ),
+          );
         sunroom.add(buildShadow(wallW_B, wallW_C));
 
         // ── Opaque dark INTERIOR occluder ──────────────────────────────────────
@@ -1512,7 +2264,11 @@
           // Single flat wall faces +Z (camera side), so its dark interior sits
           // just BEHIND it (−z); the L-shape's front wall is at z=wallW_B with the
           // interior in front of it (smaller z), so it centres on wallW_B/2.
-          interior.position.set(wallW_C / 2, ih / 2 + 0.1, singleWall ? -0.3 : wallW_B / 2);
+          interior.position.set(
+            wallW_C / 2,
+            ih / 2 + 0.1,
+            singleWall ? -0.3 : wallW_B / 2,
+          );
           sunroom.add(interior);
         }
 
@@ -1580,7 +2336,14 @@
                 dctx.fillStyle = "#22ff22";
                 dctx.strokeStyle = "#000";
                 camera.worldPts.forEach((wp) => {
-                  const [sx, sy] = worldToScreen(cam, wp[0], wp[1], wp[2], photoW, photoH);
+                  const [sx, sy] = worldToScreen(
+                    cam,
+                    wp[0],
+                    wp[1],
+                    wp[2],
+                    photoW,
+                    photoH,
+                  );
                   dctx.beginPath();
                   dctx.arc(sx, sy, 5, 0, 2 * Math.PI);
                   dctx.fill();
@@ -1626,7 +2389,13 @@
         // the header beam. No-op for every other roof style.
         if (underExisting && payload.roofline && payload.roofline.length >= 2) {
           const ue = await applyUnderExisting(
-            compositeURL, maskURL, photoDataUrl, payload.roofline, photoW, photoH, fc,
+            compositeURL,
+            maskURL,
+            photoDataUrl,
+            payload.roofline,
+            photoW,
+            photoH,
+            fc,
           );
           compositeURL = ue.composite;
           maskURL = ue.mask;

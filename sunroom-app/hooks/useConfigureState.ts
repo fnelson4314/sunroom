@@ -23,7 +23,6 @@ export type Option = {
 export type UnitMaterials = {
   transom: "glass" | "solid";
   kneewall: "glass" | "solid";
-  solidStyle?: SolidMaterial;
 };
 
 export type SolidMaterial = "panel" | "vinyl" | "hardieboard";
@@ -143,6 +142,11 @@ export type ConfigureState = {
   wallAddOns: Record<string, Record<string, string>>;
   defaultTransomHeightIn: string; // global default transom height (inches)
   defaultKneewallHeightIn: string; // global default kneewall height (inches)
+  // Structure-wide solid material (panel/vinyl/hardieboard) per feature. Picking
+  // solid on a transom/kneewall/wing shares ONE style across ALL solid sections of
+  // that feature — kneewall, transom, and wing are independent of each other
+  // (e.g. vinyl kneewalls + hardieboard transoms). Mirrors screenRoom.kneewall.solidStyle.
+  solidStyles: { transom: SolidMaterial; kneewall: SolidMaterial; wing: SolidMaterial };
   roofType: Option | null;
   roofColorNote: string;
   roofAddOns: Record<string, string>;
@@ -303,6 +307,7 @@ const initialState: ConfigureState = {
   wallAddOns: {},
   defaultTransomHeightIn: "",
   defaultKneewallHeightIn: "",
+  solidStyles: { transom: "panel", kneewall: "panel", wing: "panel" },
   roofType: null,
   roofColorNote: "",
   roofAddOns: {},
@@ -670,6 +675,16 @@ export function useConfigureState() {
           };
         }),
       },
+    }));
+
+  // Structure-wide solid style, shared across every solid section of the feature.
+  const setSolidStyle = (
+    feature: "transom" | "kneewall" | "wing",
+    style: SolidMaterial,
+  ) =>
+    setState((prev) => ({
+      ...prev,
+      solidStyles: { ...prev.solidStyles, [feature]: style },
     }));
 
   const setSolidPanelMaterial = (
@@ -1046,8 +1061,19 @@ export function useConfigureState() {
         );
         if (!option) return;
         const isGlassFeature = feature === "transom" || feature === "kneewall";
+        // Only apply the glass upcharge when a unit that has this feature is
+        // actually set to glass. Gating on isGlassFeature alone re-added the
+        // upcharge on every panel-type change, pricing a solid kneewall/transom
+        // as glass (mirrors the anyGlass check in setUnitMaterial).
+        const anyGlass =
+          isGlassFeature &&
+          !!updatedWall?.panelTypes.some((ptId, i) => {
+            const def = PANEL_TYPE_FEATURE_MAP[ptId];
+            if (!def?.includes(feature)) return false;
+            return updatedWall.unitMaterials[i]?.[feature] === "glass";
+          });
         const isActive = wallOptions[option.id] !== undefined;
-        const shouldBeActive = activeFeatures.has(feature) && isGlassFeature;
+        const shouldBeActive = activeFeatures.has(feature) && anyGlass;
         if (shouldBeActive && !isActive) wallOptions[option.id] = wallSqft;
         else if (!shouldBeActive && isActive) delete wallOptions[option.id];
       });
@@ -1065,8 +1091,8 @@ export function useConfigureState() {
   const setUnitMaterial = (
     wallId: "A" | "B" | "C",
     unitIndex: number,
-    feature: "transom" | "kneewall" | "solidStyle",
-    material: "glass" | "solid" | SolidMaterial,
+    feature: "transom" | "kneewall",
+    material: "glass" | "solid",
     allOptions: Option[],
   ) => {
     setState((prev) => {
@@ -1526,8 +1552,27 @@ export function useConfigureState() {
       heightFt: String(inToCeilFt(wall.heightIn)),
       units: wall.units,
       panelTypes: wall.panelTypes,
-      unitMaterials: wall.unitMaterials,
+      // Stamp the structure-wide solid styles onto every unit so the renderer /
+      // prompt (which read per-unit) get one consistent style per feature.
+      unitMaterials: wall.unitMaterials.map((m) => ({
+        ...m,
+        transomSolidStyle: state.solidStyles.transom,
+        kneewallSolidStyle: state.solidStyles.kneewall,
+      })),
       unitDoorStyles: wall.unitDoorStyles,
+      // Per-unit width overrides — absolute inches, normalized to sum to the exact
+      // wall width so the renderer lays units out without a gap/overflow (mirrors
+      // the screen-room path). Omitted before, so the 3D composite ignored every
+      // width override the 2D visualizer showed.
+      unitWidths: (() => {
+        if (wall.unitWidths.length !== wall.units) return [];
+        const target = parseFloat(wall.widthIn) || 0;
+        const raw = wall.unitWidths.map((w) => parseFloat(w) || 0);
+        const sum = raw.reduce((a, b) => a + b, 0);
+        return sum > 0
+          ? raw.map((w) => String(Math.round(((w * target) / sum) * 10) / 10))
+          : [];
+      })(),
       unitTransomHeights: wall.unitTransomHeights.map(
         (h) => h || state.defaultTransomHeightIn,
       ),
@@ -1536,7 +1581,32 @@ export function useConfigureState() {
       ),
       splitTransom: wall.splitTransom,
       splitKneewall: wall.splitKneewall,
-      gableGlass: wall.gableGlass,
+      gableGlass: wall.gableGlass
+        ? { ...wall.gableGlass, solidStyle: state.solidStyles.wing }
+        : null,
+      // Only the wall that CARRIES the gable/wing (B on gable roofs, A/C on studio)
+      // gets the pentagon flat base, and it grows DOWN to the TRANSOM LINE: the flat
+      // height = the configured transom height, so the flat's base lands at the same
+      // height as the transom sill on the straight walls → one continuous header
+      // around the corner. Both the transom and this flat are scaled by the same PnP
+      // fit factor in the renderer, so they stay locked together as it resizes.
+      gableFlatIn: (() => {
+        const carries =
+          (wall.id === "B" && state.roofStyle === "gable") ||
+          (wall.id !== "B" && state.roofStyle === "studio");
+        if (!carries || !wall.gableGlass) return 0;
+        // Match the transom line used on the STRAIGHT walls. The wing wall usually
+        // has no transom of its own, so search the whole structure for the transom
+        // actually rendered (per-unit override || global default) and take the
+        // deepest one — that's the header the wing base must land on.
+        const transoms = state.walls.flatMap((w) =>
+          w.unitTransomHeights.map(
+            (h) => parseFloat(h || state.defaultTransomHeightIn) || 0,
+          ),
+        );
+        const transomIn = transoms.length ? Math.max(...transoms) : 0;
+        return Math.round(transomIn);
+      })(),
     }));
 
     // Screen rooms (2_inch) configure into state.screenRoom, NOT state.walls —
@@ -1609,6 +1679,11 @@ export function useConfigureState() {
         unitDoorStyles: Array.from({ length: units }, () => "screen" as const),
         splitTransom: false,
         splitKneewall: false,
+        // Screen rooms store the wing solid style ON gableGlass.solidStyle (the
+        // ScreenRoomBuilder solid picker writes it via onGableGlassChange), so pass
+        // it through RAW. Do NOT override with state.solidStyles.wing like the glass
+        // path — the screen UI never sets that, so it would clobber the user's real
+        // vinyl/hardieboard pick back to "panel" (no lap courses in the composite).
         gableGlass: wall.gableGlass,
       };
     });
@@ -1707,6 +1782,9 @@ export function useConfigureState() {
         // setting have no screenRoom.transom — keep the default rather than
         // hydrating it away as undefined.
         screenRoom: { ...prev.screenRoom, ...(saved.screenRoom ?? {}) },
+        // Drafts saved before shared solid styles existed have none — keep the
+        // default rather than hydrating the whole object away as undefined.
+        solidStyles: { ...prev.solidStyles, ...(saved.solidStyles ?? {}) },
       }));
     } catch (e) {
       console.warn("hydrateFromDraft failed:", e);
@@ -1766,6 +1844,7 @@ export function useConfigureState() {
     setScreenTransomHeight,
     setScreenGableGlass,
     setSolidPanelMaterial,
+    setSolidStyle,
     setScreenKneewallSolidStyle,
     calculateTotal,
     canGenerate,

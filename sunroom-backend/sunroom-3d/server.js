@@ -131,6 +131,9 @@ function parseConfig(body) {
       door_style: unitDoorStyles[i] ?? "sliding",
       transom_mat: (unitMaterials[i] ?? {}).transom ?? "glass",
       kneewall_mat: (unitMaterials[i] ?? {}).kneewall ?? "glass",
+      // Structure-wide solid style per feature (panel/vinyl/hardieboard).
+      transom_solid_style: (unitMaterials[i] ?? {}).transomSolidStyle ?? "panel",
+      kneewall_solid_style: (unitMaterials[i] ?? {}).kneewallSolidStyle ?? "panel",
       transom_h_in: parseFloat(unitTransomH[i]) || 0,
       kneewall_h_in: parseFloat(unitKneewallH[i]) || 0,
     }));

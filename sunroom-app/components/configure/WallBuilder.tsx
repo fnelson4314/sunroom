@@ -172,6 +172,25 @@ function ceilFt(inches: string): number {
   return Math.ceil(n / 12);
 }
 
+// gableDividerXs — x-positions of the gable/wing pane mullions. Panes == units →
+// the actual unit divider Xs (1:1 aligned, handles uneven unit widths); panes !=
+// units → EVEN symmetric spacing across the unit span (i/count). Even spacing is
+// always symmetric; a strict unit-line subset can't be. 1 pane → none. MUST match
+// gablePaneDividers in scene.html (3D renderer) so preview == composite.
+function gableDividerXs(
+  unitDivs: number[],
+  count: number,
+  spanStart: number,
+  spanWidth: number,
+): number[] {
+  const k = count - 1;
+  if (k <= 0) return [];
+  if (k === unitDivs.length) return unitDivs; // panes == units → aligned
+  return Array.from({ length: k }, (_, i) =>
+    Math.round(spanStart + (spanWidth * (i + 1)) / count),
+  );
+}
+
 function GableGlassShape({
   wallId,
   roofStyle,
@@ -294,27 +313,33 @@ function GableGlassShape({
             }}
           />
         )}
-        {/* Dividers on top of background */}
-        {Array.from({ length: config.count - 1 }).map((_, i) => {
-          const xPx =
-            dividerXPositions?.[i] ??
-            Math.round(((i + 1) / config.count) * innerWidth);
-          const w = i === kingDivIdx ? Math.round(frameWidth * 1.7) : frameWidth;
-          return (
+        {/* Gable pane dividers sit DIRECTLY ABOVE the wall's unit dividers, so each
+            lines up with the frame beneath it (user request). One per wall divider;
+            the one nearest centre is the KING, the rest DECOR pane dividers. Mirrors
+            buildGable in scene.html — keep the two in sync. */}
+        {(() => {
+          const KING = Math.round(frameWidth * 1.7);
+          const DECOR = Math.max(1, Math.round(frameWidth * 1.0));
+          const divs = dividerXPositions ?? [];
+          const mullions: { x: number; w: number }[] = divs.map((x, i) => ({
+            x,
+            w: i === kingDivIdx ? KING : DECOR,
+          }));
+          return mullions.map((m, i) => (
             <View
               key={i}
               style={{
                 position: "absolute",
-                left: xPx,
+                left: m.x,
                 top: 0,
                 bottom: 0,
-                width: w,
+                width: m.w,
                 backgroundColor: frameColor,
-                transform: [{ translateX: -w / 2 }],
+                transform: [{ translateX: -m.w / 2 }],
               }}
             />
-          );
-        })}
+          ));
+        })()}
       </View>
     </View>
   );
@@ -334,7 +359,8 @@ function PanelUnit({
   kneewallHeightIn,
   canvasInnerHeight,
   unitWidthPx,
-  solidPanelMaterial = "panel",
+  transomSolidStyle = "panel",
+  kneewallSolidStyle = "panel",
   onPress,
 }: {
   panelTypeId: string;
@@ -350,7 +376,8 @@ function PanelUnit({
   kneewallHeightIn: string;
   canvasInnerHeight: number;
   unitWidthPx?: number;
-  solidPanelMaterial?: SolidMaterial;
+  transomSolidStyle?: SolidMaterial;
+  kneewallSolidStyle?: SolidMaterial;
   onPress: () => void;
 }) {
   const def = PANEL_TYPES.find((p) => p.id === panelTypeId) ?? PANEL_TYPES[0];
@@ -410,7 +437,7 @@ function PanelUnit({
                 <SolidFill
                   width={(unitWidthPx ?? 80) / 2}
                   height={transomPx}
-                  material={solidPanelMaterial}
+                  material={transomSolidStyle}
                   areaHeightIn={transomHeightIn || "18"}
                   baseColor={SOLID_COLOR}
                 />
@@ -426,7 +453,7 @@ function PanelUnit({
                 <SolidFill
                   width={(unitWidthPx ?? 80) / 2}
                   height={transomPx}
-                  material={solidPanelMaterial}
+                  material={transomSolidStyle}
                   areaHeightIn={transomHeightIn || "18"}
                   baseColor={SOLID_COLOR}
                 />
@@ -440,7 +467,7 @@ function PanelUnit({
             <SolidFill
               width={unitWidthPx ?? 80}
               height={transomPx}
-              material={solidPanelMaterial}
+              material={transomSolidStyle}
               areaHeightIn={transomHeightIn || "18"}
               baseColor={SOLID_COLOR}
             />
@@ -485,7 +512,7 @@ function PanelUnit({
                 <SolidFill
                   width={(unitWidthPx ?? 80) / 2}
                   height={kneewallPx}
-                  material={solidPanelMaterial}
+                  material={kneewallSolidStyle}
                   areaHeightIn={kneewallHeightIn || "24"}
                   baseColor={SOLID_COLOR}
                 />
@@ -501,7 +528,7 @@ function PanelUnit({
                 <SolidFill
                   width={(unitWidthPx ?? 80) / 2}
                   height={kneewallPx}
-                  material={solidPanelMaterial}
+                  material={kneewallSolidStyle}
                   areaHeightIn={kneewallHeightIn || "24"}
                   baseColor={SOLID_COLOR}
                 />
@@ -515,7 +542,7 @@ function PanelUnit({
             <SolidFill
               width={unitWidthPx ?? 80}
               height={kneewallPx}
-              material={solidPanelMaterial}
+              material={kneewallSolidStyle}
               areaHeightIn={kneewallHeightIn || "24"}
               baseColor={SOLID_COLOR}
             />
@@ -618,6 +645,8 @@ function PanelPickerModal({
   defaultKneewallHeightIn,
   frameWidth,
   wallSystem,
+  transomSolidStyle,
+  kneewallSolidStyle,
   onSelectType,
   onMaterialChange,
   onSolidStyleChange,
@@ -639,9 +668,11 @@ function PanelPickerModal({
   defaultKneewallHeightIn: string;
   frameWidth: number;
   wallSystem: "2_inch" | "4_inch" | "6_inch" | null;
+  transomSolidStyle: SolidMaterial;
+  kneewallSolidStyle: SolidMaterial;
   onSelectType: (id: string) => void;
   onMaterialChange: (f: "transom" | "kneewall", m: "glass" | "solid") => void;
-  onSolidStyleChange: (m: SolidMaterial) => void;
+  onSolidStyleChange: (f: "transom" | "kneewall", m: SolidMaterial) => void;
   onDoorStyleChange: (s: DoorStyle) => void;
   onUnitTransomHeightChange: (v: string) => void;
   onUnitKneewallHeightChange: (v: string) => void;
@@ -748,20 +779,30 @@ function PanelPickerModal({
               </View>
             </View>
           )}
-          {(hasTransom || hasKneewall) &&
-            (currentMaterials.transom === "solid" ||
-              currentMaterials.kneewall === "solid") && (
-              <View style={styles.heightOverrideBlock}>
-                <Text style={styles.materialsTitle}>Solid Material</Text>
-                <Text style={styles.materialsSub}>
-                  Panel / vinyl / hardieboard — applied to all solid sections
-                </Text>
-                <SolidStylePicker
-                  value={(currentMaterials as any).solidStyle ?? "panel"}
-                  onChange={onSolidStyleChange}
-                />
-              </View>
-            )}
+          {hasTransom && currentMaterials.transom === "solid" && (
+            <View style={styles.heightOverrideBlock}>
+              <Text style={styles.materialsTitle}>Transom Solid Material</Text>
+              <Text style={styles.materialsSub}>
+                Panel / vinyl / hardieboard — shared by every solid transom
+              </Text>
+              <SolidStylePicker
+                value={transomSolidStyle}
+                onChange={(m) => onSolidStyleChange("transom", m)}
+              />
+            </View>
+          )}
+          {hasKneewall && currentMaterials.kneewall === "solid" && (
+            <View style={styles.heightOverrideBlock}>
+              <Text style={styles.materialsTitle}>Kneewall Solid Material</Text>
+              <Text style={styles.materialsSub}>
+                Panel / vinyl / hardieboard — shared by every solid kneewall
+              </Text>
+              <SolidStylePicker
+                value={kneewallSolidStyle}
+                onChange={(m) => onSolidStyleChange("kneewall", m)}
+              />
+            </View>
+          )}
           {(hasTransom || hasKneewall) && (
             <HeightOverrideBlock
               hasTransom={hasTransom}
@@ -1037,6 +1078,16 @@ interface WallBuilderProps {
     wallId: "A" | "B" | "C",
     material: SolidMaterial,
   ) => void;
+  // Structure-wide solid styles, one shared value per feature (independent of
+  // each other). Picking a solid style anywhere updates all solid sections of
+  // that feature across every wall.
+  transomSolidStyle: SolidMaterial;
+  kneewallSolidStyle: SolidMaterial;
+  wingSolidStyle: SolidMaterial;
+  onSolidStyleChange: (
+    feature: "transom" | "kneewall" | "wing",
+    style: SolidMaterial,
+  ) => void;
   onWallUnitWidthChange: (
     wallId: "A" | "B" | "C",
     unitIndex: number,
@@ -1046,9 +1097,9 @@ interface WallBuilderProps {
 
 const FRAME_COLORS = {
   white: { frame: "#d0d0d0", swatch: "#e8e8e8", label: "White" },
-  // Light cream, not the darker khaki-tan used before (user 2026-07-14) —
-  // matches fcHex("tan") in scene.html, the actual composite render color.
-  tan: { frame: "#e6d8b0", swatch: "#f2e9cc", label: "Tan" },
+  // A true light tan — neutral/warm, not the yellow-cream used before (user
+  // 2026-08-08). Blue channel raised to pull the yellow out; slightly lighter.
+  tan: { frame: "#e0d8c8", swatch: "#ece6da", label: "Tan" },
   bronze: { frame: "#3e2810", swatch: "#6b4228", label: "Bronze" },
 } as const;
 
@@ -1088,6 +1139,10 @@ export default function WallBuilder({
   onGableGlassChange,
   onWallAddOnToggle,
   onWallAddOnQuantityChange,
+  transomSolidStyle,
+  kneewallSolidStyle,
+  wingSolidStyle,
+  onSolidStyleChange,
 }: WallBuilderProps) {
   const [modalUnitIndex, setModalUnitIndex] = useState<number | null>(null);
   const [panelDetailsOpen, setPanelDetailsOpen] = useState(true);
@@ -1156,12 +1211,14 @@ export default function WallBuilder({
     }
   }, [roofStyle, walls.length]);
 
+  // Keep at least one gable pane per structural bay: if the unit count grows past
+  // the current pane count, raise the panes to match. It must ONLY ever raise the
+  // count — never lower a pane count the user deliberately set above the unit
+  // count, or switching tabs (this re-runs on the newly-active wall) would clobber
+  // it back down every time. That downward clobber was the "4 panes won't save"
+  // bug: on returning to a 2-unit wall it reset a chosen 4 back to 2.
   useEffect(() => {
-    if (
-      activeWall?.gableGlass &&
-      activeWall.gableGlass.count > 1 &&
-      activeWall.gableGlass.count !== activeWall.units
-    ) {
+    if (activeWall?.gableGlass && activeWall.gableGlass.count < activeWall.units) {
       onGableGlassChange(activeWall.id, {
         ...activeWall.gableGlass,
         count: activeWall.units,
@@ -1241,29 +1298,52 @@ export default function WallBuilder({
     return Math.max(10, Math.round((uw / totalUnitIn) * availableForUnits));
   });
 
-  // Gable divider x-positions aligned exactly with canvas unit dividers
-  const gableDivXPositions: number[] = [];
+  // Every between-unit divider x-position on the canvas (one per unit boundary),
+  // plus the total pixel span the units occupy (for even-spacing the gable panes).
+  const unitDivXPositions: number[] = [];
+  let unitsSpanPx = 0;
   {
     let cumX = CANVAS_PADDING;
-    for (let i = 0; i < unitPixelWidths.length - 1; i++) {
+    for (let i = 0; i < unitPixelWidths.length; i++) {
       cumX += unitPixelWidths[i];
-      gableDivXPositions.push(Math.round(cumX + frameWidth / 2));
-      cumX += frameWidth;
+      if (i < unitPixelWidths.length - 1) {
+        unitDivXPositions.push(Math.round(cumX + frameWidth / 2));
+        cumX += frameWidth;
+      }
     }
+    unitsSpanPx = cumX - CANVAS_PADDING;
   }
 
-  // The frame running up to the gable peak is a beefier king post. Pick the
-  // divider nearest the wall centre; only wall B has a centred gable peak.
-  const kingDivIdx =
-    activeWall?.id === "B" && roofStyle === "gable" && gableDivXPositions.length
-      ? gableDivXPositions.reduce(
+  // Gable pane dividers: panes == units → every unit divider (1:1 aligned);
+  // otherwise → even symmetric spacing. Same rule as scene.html's
+  // gablePaneDividers so the 2D preview and 3D composite match.
+  const gablePaneCount =
+    activeWall?.gableGlass?.count ?? unitDivXPositions.length + 1;
+  const gableDivXPositions = gableDividerXs(
+    unitDivXPositions,
+    gablePaneCount,
+    CANVAS_PADDING,
+    unitsSpanPx,
+  );
+
+  // King post = the drawn gable divider nearest centre (only wall B has a centred
+  // peak). Widen the SAME unit divider on the wall below so the thick post and its
+  // gable mullion read as one continuous member even when panes < units.
+  const isBGable = activeWall?.id === "B" && roofStyle === "gable";
+  const nearestCentre = (xs: number[]) =>
+    xs.length
+      ? xs.reduce(
           (best, x, i) =>
-            Math.abs(x - canvasWidth / 2) <
-            Math.abs(gableDivXPositions[best] - canvasWidth / 2)
+            Math.abs(x - canvasWidth / 2) < Math.abs(xs[best] - canvasWidth / 2)
               ? i
               : best,
           0,
         )
+      : -1;
+  const gableKingIdx = isBGable ? nearestCentre(gableDivXPositions) : -1;
+  const kingDivIdx =
+    gableKingIdx >= 0
+      ? unitDivXPositions.indexOf(gableDivXPositions[gableKingIdx])
       : -1;
 
   const autoAddedKeys = Object.keys(wallAddOns[activeWall?.id ?? ""] ?? {});
@@ -1580,13 +1660,8 @@ export default function WallBuilder({
                 return (
                   <View style={{ gap: 8 }}>
                     <SolidStylePicker
-                      value={effectiveGableConfig.solidStyle ?? "panel"}
-                      onChange={(m) =>
-                        onGableGlassChange(activeWall.id, {
-                          ...effectiveGableConfig,
-                          solidStyle: m,
-                        })
-                      }
+                      value={wingSolidStyle}
+                      onChange={(m) => onSolidStyleChange("wing", m)}
                     />
                     <View style={styles.priceNote}>
                       <Text style={styles.priceNoteText}>
@@ -1635,13 +1710,13 @@ export default function WallBuilder({
                   activeWall.unitTransomHeights[0] || defaultTransomHeightIn
                 }
                 wallHasTransom={wallHasTransom}
-                config={activeWall.gableGlass}
+                config={{ ...activeWall.gableGlass, solidStyle: wingSolidStyle }}
                 innerWidth={canvasWidth}
                 frameWidth={frameWidth}
                 frameColor={dynamicFrameColor}
                 canvasInnerHeight={canvasInnerHeight}
                 dividerXPositions={gableDivXPositions}
-                kingDivIdx={kingDivIdx}
+                kingDivIdx={gableKingIdx}
               />
             )}
             <View
@@ -1700,11 +1775,8 @@ export default function WallBuilder({
                         kneewallHeightIn={effectiveKneewallH}
                         canvasInnerHeight={canvasInnerHeight}
                         unitWidthPx={unitPixelWidths[i]}
-                        solidPanelMaterial={
-                          activeWall.unitMaterials[i]?.solidStyle ??
-                          activeWall.solidPanelMaterial ??
-                          "panel"
-                        }
+                        transomSolidStyle={transomSolidStyle}
+                        kneewallSolidStyle={kneewallSolidStyle}
                         onPress={() => setModalUnitIndex(i)}
                       />
                     </React.Fragment>
@@ -1945,6 +2017,8 @@ export default function WallBuilder({
           defaultKneewallHeightIn={defaultKneewallHeightIn}
           frameWidth={frameWidth}
           wallSystem={wallSystem}
+          transomSolidStyle={transomSolidStyle}
+          kneewallSolidStyle={kneewallSolidStyle}
           onSelectType={(ptId) =>
             onWallPanelTypeChange(activeWall.id, modalUnitIndex, ptId)
           }
@@ -1956,14 +2030,7 @@ export default function WallBuilder({
               material,
             )
           }
-          onSolidStyleChange={(m) =>
-            onUnitMaterialChange(
-              activeWall.id,
-              modalUnitIndex,
-              "solidStyle" as any,
-              m as any,
-            )
-          }
+          onSolidStyleChange={(feature, m) => onSolidStyleChange(feature, m)}
           onDoorStyleChange={(style) =>
             onUnitDoorStyleChange(activeWall.id, modalUnitIndex, style)
           }

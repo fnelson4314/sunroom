@@ -164,6 +164,16 @@ DOOR_STYLE_EMPHASIS = {
 }
 
 
+def _solid_style_phrase(style: str) -> str:
+    """Siding description for a solid transom / kneewall / gable-wing section.
+    The style is structure-wide per feature (panel/vinyl/hardieboard)."""
+    s = (style or "panel").lower()
+    return {
+        "vinyl": "white vinyl lap siding (closely spaced horizontal lap courses with shadow lines)",
+        "hardieboard": "white painted fiber-cement hardieboard lap siding (wider horizontal board courses with shadow lines)",
+    }.get(s, "smooth solid aluminum")
+
+
 def _describe_panel(
     panel_type_id: str,
     materials: dict,
@@ -200,13 +210,21 @@ def _describe_panel(
     details = []
 
     if has_transom:
-        mat = materials.get("transom", "glass")
+        mat = (
+            _solid_style_phrase(materials.get("transomSolidStyle"))
+            if materials.get("transom") == "solid"
+            else "glass"
+        )
         h   = f" {transom_height_in}-inch" if transom_height_in else ""
         split_note = ", center-divided" if split_transom else ""
         details.append(f"{mat}{h} transom{split_note}")
 
     if has_kneewall:
-        mat = materials.get("kneewall", "glass")
+        mat = (
+            _solid_style_phrase(materials.get("kneewallSolidStyle"))
+            if materials.get("kneewall") == "solid"
+            else "glass"
+        )
         h   = f" {kneewall_height_in}-inch" if kneewall_height_in else ""
         split_note = ", center-divided" if split_kneewall else ""
         details.append(f"{mat}{h} kneewall{split_note}")
@@ -240,7 +258,7 @@ def _describe_gable_glass(
         # Its non-solid value is screen mesh, not glazing.
         mat_label = "solid aluminum" if glass_type == "solid" else "charcoal insect screen mesh"
     else:
-        mat_label = "solid aluminum" if glass_type == "solid" else (
+        mat_label = _solid_style_phrase(gable.get("solidStyle")) if glass_type == "solid" else (
             "G1 insulated glass" if glass_type == "g1" else "single-pane glass"
         )
 

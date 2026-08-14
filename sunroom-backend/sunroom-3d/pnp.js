@@ -433,10 +433,29 @@ function solveCamera(pts, dims, photoW, photoH) {
   // fit residual. With equal weights the optimiser dumps it on the rigid ground
   // points (worldPts 2,3,4), lifting the base off the patio — the "floating
   // sunroom". Weighting the ground markers heavily forces the camera to seat the
-  // base on the clicked ground points; any leftover error lands on the TOP,
-  // where the roof overhang/gable hides it. When the clicks DO form a clean box
-  // the ground error is ~0 either way, so this never hurts a good solve.
-  const weights = pts.length >= 6 ? [1, 1, 8, 8, 8, 8] : [1, 1, 8, 8, 8];
+  // base on the clicked ground points. When the clicks DO form a clean box the
+  // ground error is ~0 either way, so this never hurts a good solve.
+  //
+  // TOP corners (worldPts 0,1) used to be weight 1 — the rest of the residual
+  // dumped there "where the roof overhang hides it". But under-existing gable
+  // captures pin the SHARED corner top (the 6th point, weight 8) while the two
+  // outer top corners stayed at 1, so the whole top residual concentrated on
+  // them and they drooped 25-40px below the clicked eave shoulders (visible on
+  // pentagon gables where the user clicks the exact corner). Bumped to 4: ground
+  // still dominates 2:1 (stays seated), pt5 stays pinned, but the outer corners
+  // no longer eat the entire residual alone.
+  // The 6 clicked points don't fit a rigid box under one camera — there's an
+  // irreducible ~14px residual (the centred-principal-point pinhole floor on
+  // hand-clicked markers). Weighting only chooses WHERE that residual lands, it
+  // can't remove it: measured on a real capture, [1,1,8,8,8,8] put ~39px on the
+  // top corners with the base planted (gnd 3.6px); [6,6,8,8,8,8] halved the top
+  // error but floated the base (gnd 11px) — same 13.9px mean, just relocated.
+  // 3 is the balance: base stays seated, tops don't droop as hard as the base-
+  // priority original. The real fix for a specific drooping corner is a more
+  // precise CLICK on it, not this knob.
+  // ponytail: calibration knob — 1=base-priority (tops droop), 8=top-priority
+  // (base floats). Don't expect it to beat the ~14px floor; it only moves it.
+  const weights = pts.length >= 6 ? [3, 3, 8, 8, 8, 8] : [1, 1, 8, 8, 8];
 
   // Seed camera positions: out in front (+Z), a spread of sideways offsets and
   // standing-ish heights. The real photographer is somewhere in this volume.
