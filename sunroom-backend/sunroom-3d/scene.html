@@ -29,11 +29,16 @@
       })();
 
       function fcHex(name) {
-        // "tan" is a light cream, not the darker khaki-tan 0xb89a6a used before
-        // (user 2026-07-14, applies to both glass sunrooms and screen rooms —
-        // both product types route through this same fcHex).
+        // "tan" is a light warm grey-beige, not the darker khaki-tan 0xb89a6a
+        // used before (user 2026-07-14, applies to both glass sunrooms and screen
+        // rooms — both route through this same fcHex).
+        // DESATURATED 2026-08-19: 0xe6d8b0 was (230,216,176) — a 54-point yellow
+        // skew that photographs as plastic, and tan rooms were coming out visibly
+        // more cartoonish than white ones (user). Real Champion tan frames measure
+        // ~(200,195,185): warm but nearly neutral. Same LIGHTNESS as the 07-14
+        // value, far less saturation. Revert knob: put 0xe6d8b0 back here.
         return (
-          { white: 0xe2e2e2, tan: 0xe6d8b0, bronze: 0x3e2810 }[name] ?? 0xe2e2e2
+          { white: 0xe2e2e2, tan: 0xd8cfbc, bronze: 0x3e2810 }[name] ?? 0xe2e2e2
         );
       }
       function rgbHex(r, g, b) {
@@ -88,6 +93,19 @@
         return fw * (fw >= 0.45 ? 2.2 : 2.0);
       }
 
+      // The THIN cosmetic frame width (ft) buildWall uses for panel frames,
+      // insets and the bottom perimeter rail — as opposed to structFw (the real
+      // frame width from the wall system), kept for structural members. Shared
+      // so the header-align block derives the SAME number buildWall draws with.
+      // These were duplicated: buildWall gained the thin/structural split
+      // (2026-08-11 "2in sliver") and header-align went on using the structural
+      // width, which dropped the gable header below the straight wall's transom
+      // sill on 4"/6" systems (2" systems were unaffected — there they're equal,
+      // which is why only glass rooms showed it).
+      function thinFw(structFwFt) {
+        return Math.min(structFwFt, 2 / 12);
+      }
+
       function glassMat(hex, opacity = 0.8) {
         // Semi-transparent dark glass with a sky sheen — reads as real glass.
         // The catch in Canny mode: see-through glass also reveals the EXISTING
@@ -108,6 +126,32 @@
         //    visible sky-reflection sheen (the dim interior comes from the
         //    occluder box behind the glass, unchanged).
         const kontext = GLASS_STYLE === "kontext";
+        // HYBRID / photoreal (2026-08-14): the composite IS the deliverable, so
+        // glass is tuned for REALISM, not AI-legibility — a light, lightly-tinted
+        // pane with a strong sky/env reflection and low roughness, the way real
+        // sunroom glass photographs. This is the OPPOSITE of the kontext tuning
+        // below (which darkens glass to widen the glass↔solid value gap for the
+        // model). Only a low-denoise polish runs over this, so realism wins here.
+        // Params are a first pass — tune on the first photoreal render. Next
+        // realism levers: real transmission (verify the software renderer supports
+        // it) and the PHOTO as envMap so glass reflects the real surroundings.
+        if (GLASS_STYLE === "photoreal") {
+          const m = new THREE.MeshPhysicalMaterial({
+            color: hex,
+            transparent: true,
+            opacity: 0.72,
+            roughness: 0.06,
+            metalness: 0.0,
+            clearcoat: 0.6,
+            clearcoatRoughness: 0.06,
+            reflectivity: 0.6,
+            envMapIntensity: 1.0,
+            side: THREE.DoubleSide,
+          });
+          if (SKY_ENV) m.envMap = SKY_ENV;
+          m.userData.isGlass = true; // glass-only mask pass (Pass 3) keys off this
+          return m;
+        }
         // CONFIG-FIDELITY (2026-08-13): the old kontext sky-wash (envMap 0.65 +
         // reflectivity/clearcoat 0.5) reflected the bright sky so hard the dark tint
         // washed out to a PALE blue-gray only one shade off the WHITE solids — so
@@ -135,6 +179,7 @@
           side: THREE.DoubleSide,
         });
         if (SKY_ENV) m.envMap = SKY_ENV;
+        m.userData.isGlass = true; // glass-only mask pass (Pass 3) keys off this
         return m;
       }
       function solidMat(hex) {
@@ -168,6 +213,11 @@
           color: hex,
           roughness: 0.25,
           metalness: 0.35,
+          // Phase 0 (2026-08-15): metalness 0.35 + scene.environment (the BLUE sky
+          // PMREM) made white frames actively mirror the sky — the dominant term of
+          // the measured blue cast (B-R +4.05 on bright structure). Nearly kill the
+          // env reflection; the warm lights carry the shading.
+          envMapIntensity: 0.05,
         });
       }
       // Insect screen (2_inch screen rooms). Deliberately NOT glassMat: real screen
@@ -209,8 +259,139 @@
             ? 0xbfc4c2
             : 0xdcd0be; // "panel"
       }
-      function kneewallMat(solidStyle) {
-        return solidMat(kneewallHex(solidStyle));
+      // Fine surface grain per solid style (Phase 1, 2026-08-15): a near-white
+      // noise map multiplied under the base color, so vinyl reads as brushed
+      // horizontal streaks, hardieboard as fiber-cement mottle, and panel stays
+      // almost smooth — instead of flat paint. Amplitude is deliberately low
+      // (~4%): the composite must carry the material's STRUCTURE; the finishing
+      // AI pass adds the photographic micro-texture. Procedural (canvas) on
+      // purpose — file-based textures would taint the canvas under file:// (see
+      // server.js launch args) and this renders fine at composite scale.
+      // `ao` adds a subtle edge vignette (micro ambient occlusion — the shadow a
+      // real frame casts into its panel reveal; kills the "flat sticker" read).
+      // ONLY for BOX solids whose UVs span exactly 0..1 (kneewall skirt, solid
+      // transom band). NEVER for ShapeGeometry faces (gable/wing) — their UVs are
+      // world coordinates, so with RepeatWrapping the vignette would TILE into a
+      // visible grid of dark bands across the face.
+      function grainTex(style, ao = false) {
+        const c = document.createElement("canvas");
+        c.width = c.height = 128;
+        const x = c.getContext("2d");
+        x.fillStyle = "#ffffff";
+        x.fillRect(0, 0, 128, 128);
+        if (style === "vinyl") {
+          // brushed horizontal streaks
+          for (let i = 0; i < 260; i++) {
+            const y = Math.random() * 128;
+            const shade = Math.random() < 0.5 ? 0 : 90;
+            x.strokeStyle = `rgba(${shade},${shade},${shade},${0.02 + Math.random() * 0.04})`;
+            x.lineWidth = 0.6 + Math.random();
+            x.beginPath();
+            x.moveTo(0, y);
+            x.lineTo(128, y);
+            x.stroke();
+          }
+        } else if (style === "hardieboard") {
+          // fiber-cement mottle
+          for (let i = 0; i < 900; i++) {
+            x.fillStyle = `rgba(0,0,0,${0.015 + Math.random() * 0.045})`;
+            x.fillRect(
+              Math.random() * 128,
+              Math.random() * 128,
+              1 + Math.random() * 3,
+              1 + Math.random() * 2,
+            );
+          }
+        } else {
+          // smooth panel: barely-there speckle so it isn't dead flat
+          for (let i = 0; i < 250; i++) {
+            x.fillStyle = `rgba(0,0,0,${0.01 + Math.random() * 0.02})`;
+            x.fillRect(Math.random() * 128, Math.random() * 128, 1, 1);
+          }
+        }
+        if (ao) {
+          // canvas row 0 = TOP of the box face. Frame above casts the strongest
+          // shadow down into the reveal; sides lighter; bottom lightest.
+          let g = x.createLinearGradient(0, 0, 0, 10);
+          g.addColorStop(0, "rgba(0,0,0,0.12)");
+          g.addColorStop(1, "rgba(0,0,0,0)");
+          x.fillStyle = g;
+          x.fillRect(0, 0, 128, 10); // top
+          g = x.createLinearGradient(0, 128, 0, 119);
+          g.addColorStop(0, "rgba(0,0,0,0.05)");
+          g.addColorStop(1, "rgba(0,0,0,0)");
+          x.fillStyle = g;
+          x.fillRect(0, 119, 128, 9); // bottom
+          g = x.createLinearGradient(0, 0, 8, 0);
+          g.addColorStop(0, "rgba(0,0,0,0.07)");
+          g.addColorStop(1, "rgba(0,0,0,0)");
+          x.fillStyle = g;
+          x.fillRect(0, 0, 8, 128); // left
+          g = x.createLinearGradient(128, 0, 120, 0);
+          g.addColorStop(0, "rgba(0,0,0,0.07)");
+          g.addColorStop(1, "rgba(0,0,0,0)");
+          x.fillStyle = g;
+          x.fillRect(120, 0, 8, 128); // right
+        }
+        const t = new THREE.CanvasTexture(c);
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        return t;
+      }
+      function kneewallMat(solidStyle, ao = false) {
+        const m = solidMat(kneewallHex(solidStyle));
+        m.map = grainTex(solidStyle, ao);
+        return m;
+      }
+      // Photoreal lap siding for kontext/photoreal solid skirts (Phase "finish
+      // this up", 2026-08-15): ONE repeating course tile — board face with a
+      // soft vertical shading, fine grain, then the butt edge: a lit lip over a
+      // cast shadow — tiled vertically at the style's true course size. Replaces
+      // flat color + drawn seam-line boxes, which read as CGI lines (user).
+      // The material is LIT (so the sun/shade shape survives) with a WHITE base
+      // color — the tile canvas carries the actual siding color.
+      // Canny keeps the old flat+seam look (its hard edges feed the edge map).
+      function lapSkirtMat(style, heightFt) {
+        const boardFt =
+          style === "vinyl" ? 4 / 12 : style === "hardieboard" ? 8 / 12 : 0;
+        if (boardFt <= 0) return kneewallMat(style, true); // smooth panel
+        const base = kneewallHex(style);
+        const hard = style === "vinyl"; // near-white base needs harder contrast
+        const css = (h) => "#" + h.toString(16).padStart(6, "0");
+        const c = document.createElement("canvas");
+        c.width = 256;
+        c.height = 64;
+        const x = c.getContext("2d");
+        const g = x.createLinearGradient(0, 0, 0, 64);
+        g.addColorStop(0, css(lighten(base, 10)));
+        g.addColorStop(0.72, css(base));
+        g.addColorStop(0.9, css(darken(base, 14)));
+        x.fillStyle = g;
+        x.fillRect(0, 0, 256, 64);
+        for (let i = 0; i < 90; i++) {
+          const y = Math.random() * 56;
+          const sh = Math.random() < 0.5 ? 0 : 255;
+          x.strokeStyle = `rgba(${sh},${sh},${sh},${0.02 + Math.random() * 0.03})`;
+          x.lineWidth = 0.5 + Math.random() * 0.8;
+          x.beginPath();
+          x.moveTo(0, y);
+          x.lineTo(256, y);
+          x.stroke();
+        }
+        x.fillStyle = css(lighten(base, 24)); // lit bottom lip of the board
+        x.fillRect(0, 56, 256, 3);
+        x.fillStyle = css(darken(base, hard ? 140 : 105)); // shadow it casts
+        x.fillRect(0, 59, 256, 5);
+        const t = new THREE.CanvasTexture(c);
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.repeat.set(1, Math.max(1, heightFt / boardFt));
+        const m = new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          roughness: 0.7,
+          metalness: 0.03,
+          map: t,
+          side: THREE.DoubleSide,
+        });
+        return m;
       }
       // Horizontal lap-siding course lines for a solid region (the dark shadow
       // under each board), so vinyl reads as tight 4in courses and hardieboard as
@@ -230,11 +411,34 @@
         return ys;
       }
       function seamMat(solidStyle) {
-        // Vinyl's base is near-white, so it needs a harder darkened line than
-        // hardieboard or FLUX flattens the courses back to a smooth skirt.
-        return solidMat(
-          darken(kneewallHex(solidStyle), solidStyle === "vinyl" ? 155 : 120),
-        );
+        // Phase 1 (2026-08-15): was a single flat dark line (solidMat of a
+        // darkened hex) — read as DRAWN lines, not lap siding (user: "the
+        // hardieboard is still just lines"). Real lap courses read as a cast
+        // SHADOW under a LIT board edge, so the seam box now carries a tiny
+        // vertical gradient texture: shadow on top, bright edge below (canvas
+        // row 0 = box top; BoxGeometry v=0 at bottom). Unlit (MeshBasic) so the
+        // values render exactly as calibrated, immune to the light rig — same
+        // reasoning as screenMat. Vinyl keeps the harder contrast (near-white
+        // base washes out otherwise); DoubleSide for the mirrored front wall.
+        const base = kneewallHex(solidStyle);
+        const hard = solidStyle === "vinyl";
+        const c = document.createElement("canvas");
+        c.width = 1;
+        c.height = 8;
+        const x = c.getContext("2d");
+        const css = (h) => "#" + h.toString(16).padStart(6, "0");
+        x.fillStyle = css(darken(base, hard ? 150 : 115)); // cast shadow
+        x.fillRect(0, 0, 1, 4);
+        x.fillStyle = css(lighten(base, 20)); // lit board edge
+        x.fillRect(0, 4, 1, 2);
+        x.fillStyle = css(darken(base, 25)); // soft return to board tone
+        x.fillRect(0, 6, 1, 2);
+        const t = new THREE.CanvasTexture(c);
+        t.magFilter = THREE.LinearFilter;
+        return new THREE.MeshBasicMaterial({
+          map: t,
+          side: THREE.DoubleSide,
+        });
       }
       // Procedural shingle texture: rows of asphalt-shingle courses with offset
       // tab joints. The COLOR doesn't matter to Canny (edges only) — the point is
@@ -381,14 +585,19 @@
           tH = kH = h * 0.25;
         }
         if (hasTransom) {
+          const texturedLapT =
+            GLASS_STYLE === "kontext" || GLASS_STYLE === "photoreal";
           const tmat = isScreen
             ? screenMat()
             : unit.transom_mat === "glass"
               ? glassMat(0x2b4754, 0.8)
-              : kneewallMat(unit.transom_solid_style);
+              : texturedLapT
+                ? lapSkirtMat(unit.transom_solid_style, tH)
+                : kneewallMat(unit.transom_solid_style, true); // ao: box UVs 0..1
           g.add(box(w - fw * 2, tH, D, tmat, w / 2, h - tH / 2, 0));
-          // Lap-siding courses on a solid transom (vinyl/hardieboard).
-          if (unit.transom_mat === "solid")
+          // Lap-siding courses on a solid transom (vinyl/hardieboard). Canny only
+          // — kontext/photoreal courses live in the lapSkirtMat texture.
+          if (unit.transom_mat === "solid" && !texturedLapT)
             for (const y of lapCourseYs(unit.transom_solid_style, h - tH, h))
               g.add(
                 box(
@@ -441,15 +650,18 @@
           g.add(box(dsw, glH, 0.18, fmat, dx0 + dsw / 2, glCY, 0.02)); // left stile
           g.add(box(dsw, glH, 0.18, fmat, dx1 - dsw / 2, glCY, 0.02)); // right stile
           g.add(box(ddw, dsw, 0.18, fmat, w / 2, botY + glH - dsw / 2, 0.02)); // top rail
-          g.add(box(ddw, dsw * 1.6, 0.2, fmat, w / 2, botY + dsw * 0.8, 0.02)); // BOLD bottom kick rail
-          // Mid (lock) rail + a PROMINENT vertical pull handle — the strongest
-          // "door" cues for the AI. The old sliding flush-grip was too subtle and
-          // the door read as a window; a full-height glass door still gets a real
-          // visible handle. Metal grey, drawn well proud so it survives the repaint.
-          g.add(box(ddw, dsw * 1.1, 0.18, fmat, w / 2, glCY, 0.02)); // mid/lock rail
+          g.add(box(ddw, dsw * 1.3, 0.2, fmat, w / 2, botY + dsw * 0.65, 0.02)); // bottom kick rail
+          // NO mid/grid rail — a horizontal bar turned the leaf into a 4-lite WINDOW
+          // grid (user), the opposite of what we want. A full-height glass door's
+          // only strong "door" cue is a PROMINENT vertical pull handle, off to one
+          // (latch) side at grip height. Make it the dominant feature: a long dark
+          // metal bar standing well proud so the repaint can't miss it.
+          const handleMat = new THREE.MeshStandardMaterial({
+            color: 0x3a3f45, roughness: 0.3, metalness: 0.6,
+          });
           g.add(
-            box(fw * 0.55, glH * 0.32, fw * 1.4, solidMat(0x8d9196),
-                dx1 - dsw - fw * 0.6, glCY + glH * 0.02, 0.14), // vertical pull, latch side
+            box(fw * 0.6, glH * 0.42, fw * 1.6, handleMat,
+                dx1 - dsw - fw * 0.9, glCY, 0.18), // tall vertical pull, latch side
           );
         }
         // Screen door: a hinged single leaf, not a slider. Give it its own bold
@@ -621,8 +833,12 @@
         }
         if (hasKneewall) {
           const isSolidKnee = unit.kneewall_mat === "solid";
+          const texturedLap =
+            GLASS_STYLE === "kontext" || GLASS_STYLE === "photoreal";
           const kmat = isSolidKnee
-            ? kneewallMat(unit.kneewall_solid_style)
+            ? texturedLap
+              ? lapSkirtMat(unit.kneewall_solid_style, kH)
+              : kneewallMat(unit.kneewall_solid_style, true) // ao: box UVs 0..1
             : glassMat(0x2b4754, 0.8);
           g.add(box(w, fw, D * 1.2, fmat, w / 2, kH + fw / 2, 0));
           // A SOLID kneewall runs the FULL unit width (not inset by the frame) and
@@ -641,10 +857,10 @@
               0,
             ),
           );
-          // Lap-siding courses on a solid kneewall (vinyl/hardieboard). Full width
-          // so the lines stay continuous across the abutting skirts; drawn proud of
-          // the 0.16 skirt so they read.
-          if (isSolidKnee)
+          // Lap-siding courses on a solid kneewall (vinyl/hardieboard). Canny
+          // only — kontext/photoreal carry the courses in the lapSkirtMat
+          // texture itself (drawn seam boxes over it would double the lines).
+          if (isSolidKnee && !texturedLap)
             for (const y of lapCourseYs(unit.kneewall_solid_style, 0, kH))
               g.add(
                 box(
@@ -715,7 +931,7 @@
         // top rail. fw = a thin ~2in "sliver" used for the COSMETIC frames the user
         // wants skinny: window panel frames + insets and the bottom perimeter rail.
         const structFw = wall.frame_width_in / 12,
-          fw = Math.min(structFw, 2 / 12),
+          fw = thinFw(structFw),
           wallW = wall.width_in / 12,
           wallH = wall.height_in / 12;
         // Screen-room transom on a gable/wing wall: that height is EATEN OFF THE
@@ -892,7 +1108,12 @@
             const knIn = parseFloat(kn.heightIn) || 0;
             const kH = knIn > 0 ? (knIn / 12) * hs : wallH * 0.22;
             const style = kn.solidStyle || "panel";
-            const kmat = kneewallMat(style);
+            // kontext/photoreal: photoreal course texture; canny: flat + seam boxes.
+            const texturedLapK =
+              GLASS_STYLE === "kontext" || GLASS_STYLE === "photoreal";
+            const kmat = texturedLapK
+              ? lapSkirtMat(style, kH)
+              : kneewallMat(style, true); // ao: box UVs 0..1
             // Lap/board reveal: vinyl 4in, hardieboard 8in, panel = smooth (none).
             // A darker seam line at each reveal so Canny reads the siding courses —
             // 4in gives twice as many lines as 8in, the visible vinyl↔hardie tell.
@@ -907,7 +1128,7 @@
             const seamMat = solidMat(darken(kneewallHex(style), seamDark));
             for (const s of segList) {
               g.add(box(s.w, kH, 0.11, kmat, s.cx, kH / 2, 0)); // skirt
-              if (boardFt > 0) {
+              if (boardFt > 0 && !texturedLapK) {
                 // Seam lines centred on the plane, deeper than the skirt, so they
                 // read on both faces (the mirrored front wall flips local +z).
                 for (let y = boardFt; y < kH - 1e-3; y += boardFt) {
@@ -1601,6 +1822,68 @@
       }
 
       function buildShadow(wallW_B, wallW_C) {
+        // photoreal + kontext (HYBRID): a SOFT radial-gradient ambient-occlusion
+        // contact shadow that spills past the footprint onto the visible ground,
+        // so the structure reads as sitting ON the yard instead of pasted over
+        // it. The old hard rectangle (kept for legacy canny below) sat mostly
+        // UNDER the walls and had no falloff, so no grounding showed.
+        // Direction-agnostic (a symmetric AO puddle, no sun-direction
+        // assumption) — a real sun-matched cast shadow is a later, harder step.
+        // Stays noMask (outside the structure mask, so the tone-match and the
+        // config gate never touch ground pixels) — instead it gets its OWN
+        // Pass-4 shadow mask (userData.isShadow + the white maskMat below), and
+        // tasks.py re-locks the background through structure ∪ shadow, so the
+        // shadow survives to the final image (it was being erased by the photo
+        // re-lock, leaving the base floating — user report 2026-08-15).
+        if (GLASS_STYLE === "photoreal" || GLASS_STYLE === "kontext") {
+          const mkGrad = (color) => {
+            const c = document.createElement("canvas");
+            c.width = c.height = 128;
+            const x = c.getContext("2d");
+            const g = x.createRadialGradient(64, 64, 12, 64, 64, 64);
+            g.addColorStop(0.0, `rgba(${color},0.5)`);
+            g.addColorStop(0.5, `rgba(${color},0.32)`);
+            g.addColorStop(1.0, `rgba(${color},0)`);
+            x.fillStyle = g;
+            x.fillRect(0, 0, 128, 128);
+            // CONTACT ring at the footprint perimeter — the darkest shadow is
+            // exactly where walls meet ground, which is what visually welds the
+            // base to the patio ("still floating", user 2026-08-15). Plane is
+            // footprint×(1.7,1.9), so the footprint edge in canvas coords is
+            // x 26..102, y 30..98. Stroked wide→narrow for a soft blur.
+            x.lineJoin = "round";
+            for (const [lw, a] of [
+              [14, 0.1],
+              [8, 0.16],
+              [4, 0.22],
+            ]) {
+              x.strokeStyle = `rgba(${color},${a})`;
+              x.lineWidth = lw;
+              x.strokeRect(26, 30, 76, 68);
+            }
+            return new THREE.CanvasTexture(c);
+          };
+          const m = new THREE.Mesh(
+            new THREE.PlaneGeometry(wallW_C * 1.7, wallW_B * 1.9),
+            new THREE.MeshBasicMaterial({
+              map: mkGrad("0,0,0"),
+              transparent: true,
+              depthWrite: false,
+            }),
+          );
+          m.rotation.x = -Math.PI / 2;
+          m.position.set(wallW_C / 2, 0.02, wallW_B / 2);
+          m.renderOrder = 1;
+          m.userData.noMask = true;
+          m.userData.isShadow = true;
+          // White twin of the gradient for the Pass-4 shadow-alpha mask.
+          m.userData.maskMat = new THREE.MeshBasicMaterial({
+            map: mkGrad("255,255,255"),
+            transparent: true,
+            depthWrite: false,
+          });
+          return m;
+        }
         // Stronger contact shadow on the patio — anchors the sunroom as a 3D
         // object standing IN FRONT of the house, not a window set into the wall.
         const m = new THREE.Mesh(
@@ -1773,6 +2056,150 @@
         return { composite, mask };
       }
 
+      // ── Photo tone-match (Phase 1, 2026-08-15) ─────────────────────────────
+      // The structure is lit by a FIXED light rig; the photo was lit by the real
+      // sun — the mismatch is a big part of the "pasted CGI" read. Measure the
+      // photo's per-channel means (sky rows excluded) vs the structure's, then
+      // nudge the structure HALFWAY toward the photo's tone through the exact
+      // structure mask (photo pixels untouched; mask value = blend weight, so
+      // feathered edges blend). Half-strength + clamped gains so a golden-hour
+      // photo warms the frames believably without dyeing them orange.
+      async function toneMatchStructure(compositeURL, maskURL, photoDataUrl, W, H) {
+        const load = (src) =>
+          new Promise((res, rej) => {
+            const im = new Image();
+            im.onload = () => res(im);
+            im.onerror = rej;
+            im.src = src;
+          });
+        const [comp, mask, photo] = await Promise.all([
+          load(compositeURL),
+          load(maskURL),
+          load(photoDataUrl),
+        ]);
+        const cnv = (img) => {
+          const c = document.createElement("canvas");
+          c.width = W;
+          c.height = H;
+          const x = c.getContext("2d");
+          x.drawImage(img, 0, 0, W, H);
+          return [c, x];
+        };
+        const [cc, cx] = cnv(comp);
+        const [, mx] = cnv(mask);
+        const [, px] = cnv(photo);
+        const cd = cx.getImageData(0, 0, W, H);
+        const md = mx.getImageData(0, 0, W, H);
+        const pd = px.getImageData(0, 0, W, H);
+
+        // Compare WHITES to WHITES: the photo's brightest decile (its white/light
+        // surfaces, which carry the scene's illuminant color and level) vs the
+        // structure's brightest decile (the white frames). Matching overall means
+        // is unsound — the dark teal glass dominated the structure mean and the
+        // "correction" dyed the frames warm (measured B-R -13.6 on a neutral
+        // photo). Whites-to-whites is the scene's actual white point.
+        const brightStats = (data, pick) => {
+          // pass 1: luminance histogram over picked pixels → P90 threshold
+          const hist = new Array(256).fill(0);
+          let n = 0;
+          for (let i = 0; i < data.length; i += 4) {
+            if (!pick(i)) continue;
+            const l =
+              (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0;
+            hist[l]++;
+            n++;
+          }
+          if (n < 500) return null;
+          let acc = 0,
+            thr = 255;
+          for (let l = 255; l >= 0; l--) {
+            acc += hist[l];
+            if (acc >= n * 0.1) {
+              thr = l;
+              break;
+            }
+          }
+          // pass 2: per-channel means over the bright set
+          const sum = [0, 0, 0];
+          let bn = 0;
+          for (let i = 0; i < data.length; i += 4) {
+            if (!pick(i)) continue;
+            const l = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+            if (l >= thr) {
+              sum[0] += data[i];
+              sum[1] += data[i + 1];
+              sum[2] += data[i + 2];
+              bn++;
+            }
+          }
+          return bn ? sum.map((s) => s / bn) : null;
+        };
+        const skyRows = Math.floor(H * 0.35);
+        const pStats = brightStats(pd.data, (i) => ((i / 4 / W) | 0) >= skyRows);
+        const sStats = brightStats(cd.data, (i) => md.data[i] > 128);
+        if (!pStats || !sStats) return compositeURL;
+        const K = 0.5; // half-strength correction
+        let gain = [0, 1, 2].map((ch) => {
+          const g = 1 + K * (pStats[ch] / sStats[ch] - 1);
+          return Math.min(1.2, Math.max(0.8, g));
+        });
+        // Split LUMINANCE from COLOR and cap the color part hard (±4%): the
+        // brightness adaptation is the realism win, but on a warm sunny photo
+        // the unbounded per-channel gains dyed the whole white structure CREAM
+        // (user report 2026-08-15). White frames must stay white.
+        const lumGain = (gain[0] + gain[1] + gain[2]) / 3;
+        gain = gain.map((g) =>
+          lumGain * Math.min(1.04, Math.max(0.96, g / lumGain)),
+        );
+        console.log(
+          `[scene] tone-match: struct-white rgb(${sStats
+            .map((v) => v.toFixed(0))
+            .join(",")}) photo-white rgb(${pStats
+            .map((v) => v.toFixed(0))
+            .join(",")}) gains ${gain.map((g) => g.toFixed(3)).join("/")}`,
+        );
+        for (let i = 0; i < cd.data.length; i += 4) {
+          const w = md.data[i] / 255;
+          if (w > 0) {
+            for (let ch = 0; ch < 3; ch++) {
+              const v = cd.data[i + ch] * (1 - w + w * gain[ch]);
+              cd.data[i + ch] = v < 0 ? 0 : v > 255 ? 255 : v;
+            }
+          }
+        }
+        cx.putImageData(cd, 0, 0);
+        return cc.toDataURL("image/jpeg", 0.95);
+      }
+
+      // Black out everything ABOVE the traced roofline in a mask data URL. Keeps
+      // the glass-only mask consistent with the under-existing composite/structure
+      // clip, so the regional composite never pulls AI glass above the existing roof.
+      async function clipAboveRoofline(maskURL, roofline, photoW, photoH) {
+        const pts = roofline.map(([x, y]) => [x * photoW, y * photoH]);
+        const img = await new Promise((res, rej) => {
+          const im = new Image();
+          im.onload = () => res(im);
+          im.onerror = rej;
+          im.src = maskURL;
+        });
+        const c = document.createElement("canvas");
+        c.width = photoW;
+        c.height = photoH;
+        const x = c.getContext("2d");
+        x.drawImage(img, 0, 0, photoW, photoH);
+        x.beginPath();
+        x.moveTo(0, 0);
+        x.lineTo(photoW, 0);
+        x.lineTo(photoW, pts[pts.length - 1][1]);
+        for (let i = pts.length - 1; i >= 0; i--) x.lineTo(pts[i][0], pts[i][1]);
+        x.lineTo(0, pts[0][1]);
+        x.closePath();
+        x.clip();
+        x.fillStyle = "#000";
+        x.fillRect(0, 0, photoW, photoH);
+        return c.toDataURL("image/png");
+      }
+
       async function renderScene(payload) {
         const {
           photoDataUrl,
@@ -1799,7 +2226,11 @@
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         renderer.outputEncoding = THREE.sRGBEncoding;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.05;
+        // 1.05 → 1.12 (Phase 0): recover the brightness the removed blue env/fill
+        // contributed. Only the STRUCTURE is affected — the photo background
+        // bypasses tone mapping in r128 — so this lifts white frames back to
+        // white without touching the house photo.
+        renderer.toneMappingExposure = 1.12;
 
         const scene = new THREE.Scene();
         // Sky reflection for glass — set BEFORE geometry is built so glassMat
@@ -1825,6 +2256,20 @@
             (tex) => {
               tex.encoding = THREE.sRGBEncoding;
               scene.background = tex;
+              // HYBRID photoreal: reflect the REAL scene in the glass instead of
+              // the flat procedural sky, which just washed panes uniformly pale
+              // (render 1). A perspective photo isn't a 360 pano, so as an equirect
+              // env it's approximate — but it gives glass believable real-scene
+              // colours (house, sky, yard) to mirror, which reads far more like
+              // glass than a gradient. CLONE it (equirect mapping) so the flat
+              // background copy is untouched. Set before geometry so glassMat uses it.
+              if (GLASS_STYLE === "photoreal") {
+                const env = tex.clone();
+                env.mapping = THREE.EquirectangularReflectionMapping;
+                env.needsUpdate = true;
+                SKY_ENV = env;
+                scene.environment = env;
+              }
               res();
             },
             undefined,
@@ -2002,7 +2447,10 @@
         cam.updateMatrixWorld(true);
 
         // ── Lighting ──
-        scene.add(new THREE.AmbientLight(0xfff8f0, 0.7));
+        // 0.7 → 0.78 (Phase 0): killing the blue env/fill light also removed its
+        // brightness — bright-structure mean dropped 222→207. Restore the level
+        // through the warm ambient so white frames stay white, not gray.
+        scene.add(new THREE.AmbientLight(0xfff8f0, 0.78));
         const sun = new THREE.DirectionalLight(0xfff4e0, 1.15);
         sun.position.set(18, 25, -8);
         sun.castShadow = true;
@@ -2013,10 +2461,15 @@
         sun.shadow.camera.right = sun.shadow.camera.top = 25;
         sun.shadow.bias = -0.001;
         scene.add(sun);
-        const fill = new THREE.DirectionalLight(0xc8d8ff, 0.38);
+        // Phase 0 (2026-08-15): fill was 0xc8d8ff and hemisphere sky 0x87ceeb —
+        // both cool blue, measurable as B-R +4.05 on bright structure (white
+        // frames/solids tinted blue, user report "faint blueish glow"). Neutral
+        // warm-gray fill + near-neutral hemisphere keep the shading shape but
+        // drop the cast (measured via scratchpad measure_cast.py, not eyeballed).
+        const fill = new THREE.DirectionalLight(0xe6e4e0, 0.38);
         fill.position.set(-10, 6, -15);
         scene.add(fill);
-        scene.add(new THREE.HemisphereLight(0x87ceeb, 0xc8a870, 0.28));
+        scene.add(new THREE.HemisphereLight(0xe0e2e4, 0xc8a870, 0.28));
 
         // ── Geometry ──
         // World coords match PnP: origin=pt3 (left house bottom), +X right, +Y up, +Z toward camera.
@@ -2147,17 +2600,26 @@
             } else {
               const otherT = wallTransomFt(straight);
               if (otherT > 0) {
-                // + one frame width: the gable's flat-base TOP RAIL and the
-                // straight wall's transom SILL RAIL otherwise sit ~fw apart, so the
-                // header doesn't line up around the corner (the gable base rides one
-                // rail-height high — user report). This +fw was the previously-
-                // working value; restoring it. Affects ONLY this branch (a gable
-                // wall with no transom that borrows the straight wall's) — the
-                // triangle (flat 0) and excess-height branches are untouched.
-                const fwFt = (straight.frame_width_in || 0) / 12;
-                flatFt = otherT + fwFt;
+                // Land the two header bands on ONE axis around the corner. They
+                // are different members drawn by different code:
+                //   straight wall — buildPanel's transom sill rail, centred at
+                //     wallH - tH - 1.5*fw   (panel sits at +fw, rail at h-tH-fw/2)
+                //   gable wall    — buildWall's unit<->gable top rail, centred at
+                //     wallH - flat - structFw/2
+                // Equating the centres gives the term below. It reduces to the
+                // historically-working "+fw" whenever fw === structFw, which is
+                // how it read before buildWall split the thin cosmetic frame from
+                // the structural one and left this line on the structural width
+                // (the "frames don't line up" regression, glass only — on a 2"
+                // screen system the two widths are equal so it never showed).
+                // Range over the real wall systems: 4" -> +1in, 6" -> +0in. Never
+                // negative, so a pentagon can never collapse into a triangle here.
+                const structFwFt = (straight.frame_width_in || 0) / 12;
+                const fwFt = thinFw(structFwFt);
+                flatFt = otherT + 1.5 * fwFt - structFwFt / 2;
                 why =
-                  "no gable transom → pentagon on straight-wall transom (+fw)";
+                  "no gable transom → pentagon on straight-wall transom " +
+                  `(flat = transom + ${((1.5 * fwFt - structFwFt / 2) * 12).toFixed(1)}in rail offset)`;
               } else {
                 flatFt = Math.max(0, wallH - DOOR_H_FT);
                 why = "no transom anywhere → pentagon from excess height";
@@ -2227,18 +2689,22 @@
           }
         }
 
-        if (!underExisting && !singleWall)
-          sunroom.add(
-            buildRoof(
-              wallW_B,
-              wallW_C,
-              wallH,
-              roofStyle,
-              shHex,
-              fc,
-              gableOnFront,
-            ),
+        if (!underExisting && !singleWall) {
+          const roofGroup = buildRoof(
+            wallW_B,
+            wallW_C,
+            wallH,
+            roofStyle,
+            shHex,
+            fc,
+            gableOnFront,
           );
+          // Tag the whole roof so the glass-mask pass keeps it in the AI region:
+          // the AI's shingled roof blends to the house far better than the flat
+          // composite roof, and the roof carries no config to protect.
+          roofGroup.traverse((o) => (o.userData.isRoof = true));
+          sunroom.add(roofGroup);
+        }
         sunroom.add(buildShadow(wallW_B, wallW_C));
 
         // ── Opaque dark INTERIOR occluder ──────────────────────────────────────
@@ -2385,6 +2851,87 @@
         scene.background = savedBg;
         hidden.forEach((o) => (o.visible = true));
 
+        // ── Pass 3: a GLASS-ONLY mask (white glass on black) ──
+        // Powers the regional photoreal composite (tasks.py): the final render
+        // keeps the AI's photoreal GLASS only inside this mask, and the EXACT
+        // composite (frames, solids, doors, roof) everywhere else — so the AI adds
+        // glass realism but CANNOT hallucinate config. Every glass mesh is tagged
+        // in glassMat (material.userData.isGlass); a frame drawn in FRONT of glass
+        // renders black here, correctly excluding it from the glass region.
+        const gWhite = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          side: THREE.DoubleSide,
+        });
+        const gBlack = new THREE.MeshBasicMaterial({
+          color: 0x000000,
+          side: THREE.DoubleSide,
+        });
+        scene.background = new THREE.Color(0x000000);
+        const gmHidden = [];
+        const gmMat = [];
+        sunroom.traverse((o) => {
+          if (!o.isMesh) return;
+          if (o.userData && o.userData.noMask) {
+            if (o.visible) {
+              o.visible = false;
+              gmHidden.push(o);
+            }
+            return;
+          }
+          gmMat.push([o, o.material]);
+          // Keep GLASS and ROOF from the AI; everything else (frames, solids,
+          // doors, walls) stays exact from the composite.
+          const keepFromAI =
+            o.userData.isRoof ||
+            (o.material && o.material.userData && o.material.userData.isGlass);
+          o.material = keepFromAI ? gWhite : gBlack;
+        });
+        renderer.render(scene, cam);
+        let glassMaskURL = canvas.toDataURL("image/png");
+        gmMat.forEach(([o, m]) => (o.material = m));
+        gmHidden.forEach((o) => (o.visible = true));
+
+        // ── Pass 4: SHADOW-only alpha mask (white gradient on black) ──
+        // Lets tasks.py extend the background re-lock to structure ∪ shadow so
+        // the contact shadow survives (it lives OUTSIDE the structure mask on
+        // purpose — see buildShadow). Empty/black for modes with no soft shadow.
+        const shHiddenL = [];
+        const shSwap = [];
+        scene.background = new THREE.Color(0x000000);
+        sunroom.traverse((o) => {
+          if (!o.isMesh) return;
+          if (o.userData.isShadow && o.userData.maskMat) {
+            shSwap.push([o, o.material]);
+            o.material = o.userData.maskMat;
+          } else if (o.visible) {
+            o.visible = false;
+            shHiddenL.push(o);
+          }
+        });
+        renderer.render(scene, cam);
+        const shadowMaskURL = canvas.toDataURL("image/png");
+        shSwap.forEach(([o, m]) => (o.material = m));
+        shHiddenL.forEach((o) => (o.visible = true));
+        scene.background = savedBg;
+
+        // Tone-match the structure to the photo's light (kontext/photoreal — the
+        // modes whose composite pixels the AI actually reproduces; legacy canny
+        // reads edges only, skip it). BEFORE the under-existing clip, which may
+        // re-cover part of the adjusted region with photo — harmless.
+        if (GLASS_STYLE === "kontext" || GLASS_STYLE === "photoreal") {
+          try {
+            compositeURL = await toneMatchStructure(
+              compositeURL,
+              maskURL,
+              photoDataUrl,
+              photoW,
+              photoH,
+            );
+          } catch (e) {
+            console.warn("[scene] tone-match failed (composite unadjusted):", e.message);
+          }
+        }
+
         // Under-existing: clip both passes to the traced existing roofline and add
         // the header beam. No-op for every other roof style.
         if (underExisting && payload.roofline && payload.roofline.length >= 2) {
@@ -2399,9 +2946,20 @@
           );
           compositeURL = ue.composite;
           maskURL = ue.mask;
+          glassMaskURL = await clipAboveRoofline(
+            glassMaskURL,
+            payload.roofline,
+            photoW,
+            photoH,
+          );
         }
 
-        window.__result = { composite: compositeURL, mask: maskURL };
+        window.__result = {
+          composite: compositeURL,
+          mask: maskURL,
+          glassMask: glassMaskURL,
+          shadowMask: shadowMaskURL,
+        };
         if (window.__done) window.__done(window.__result);
       }
     </script>

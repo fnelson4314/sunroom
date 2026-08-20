@@ -321,6 +321,13 @@ async function render3D(body) {
     ({ combo, dims, camParams } = resolvePose(spec, body.wallCombo, pts, photoW, photoH));
   }
 
+  // The footprint as CONFIGURED, read before auto-fit rewrites the specs below.
+  // Reported back to the caller so the preview screen can tell the salesperson
+  // when the typed dimensions disagree with the plotted markers — that mismatch
+  // is what rolls the camera and makes the whole structure look tilted, and it
+  // is invisible in the composite itself.
+  const configuredDims = { wallW_B: dims.wallW_B, wallW_C: dims.wallW_C };
+
   // Footprint auto-fit: if the solve adopted photo-implied wall widths, the
   // DRAWN walls must use them too (scene.html reads the spec widths). Pricing
   // is untouched — this only affects the render. (Single-wall never auto-fits.)
@@ -464,7 +471,39 @@ async function render3D(body) {
 
     // Strip data-URL prefixes → raw base64 strings.
     const strip = (d) => (d ? d.replace(/^data:image\/\w+;base64,/, "") : null);
-    return { composite: strip(result.composite), mask: strip(result.mask), combo };
+    return {
+      composite: strip(result.composite),
+      mask: strip(result.mask),
+      glassMask: strip(result.glassMask),
+      shadowMask: strip(result.shadowMask),
+      combo,
+      // How well the configured structure actually fits the captured markers.
+      // reprojErr is in photo pixels: the assumed-K Euclidean PnP floors around
+      // ~16px on hand-clicked markers, so >30 means the box cannot be aligned
+      // and the solver has rolled the camera to compromise.
+      fit: {
+        reprojErr: Math.round(reproErr * 10) / 10,
+        // Ground markers vs the whole set. The three ground points are
+        // height-independent, so a LOW ground error next to a high mean means
+        // the footprint is fine and the two TOP markers are the problem — they
+        // were clicked at heights no single wall height can satisfy, and the
+        // solver twists the box splitting the difference.
+        groundErr: Math.round((camParams.groundReprojErr || 0) * 10) / 10,
+        // What the markers imply vs what was typed. The solver deliberately
+        // ignores the configured height (absolute sweep), so a large gap means
+        // the top markers, not the config, are placing the roofline.
+        configuredHeightFt: Math.round(dims.wallH * 10) / 10,
+        solvedHeightFt: Math.round((camParams.solvedHeight || 0) * 10) / 10,
+        configuredFt: {
+          side: Math.round(configuredDims.wallW_B * 10) / 10,
+          front: Math.round(configuredDims.wallW_C * 10) / 10,
+        },
+        drawnFt: {
+          side: Math.round(dims.wallW_B * 10) / 10,
+          front: Math.round(dims.wallW_C * 10) / 10,
+        },
+      },
+    };
   } finally {
     // Closing a page on a browser that already died throws — never let that
     // rejection escape and crash the process.
@@ -492,9 +531,9 @@ app.post("/render", async (req, res) => {
     // If a render fails because the Puppeteer browser died mid-request, relaunch
     // a fresh one and try ONCE more before giving up. Otherwise a single browser
     // crash would fail the whole request and force the Python fallback.
-    let composite, mask, combo;
+    let composite, mask, glassMask, shadowMask, combo, fit;
     try {
-      ({ composite, mask, combo } = await render3D(req.body));
+      ({ composite, mask, glassMask, shadowMask, combo, fit } = await render3D(req.body));
     } catch (firstErr) {
       console.warn(
         `[render] first attempt failed (${firstErr.message}) — relaunching browser and retrying`,
@@ -503,7 +542,7 @@ app.post("/render", async (req, res) => {
         if (browser) await browser.close().catch(() => {});
       } catch {}
       browser = null;
-      ({ composite, mask, combo } = await render3D(req.body));
+      ({ composite, mask, glassMask, shadowMask, combo, fit } = await render3D(req.body));
     }
 
     console.log(
@@ -515,7 +554,7 @@ app.post("/render", async (req, res) => {
     // MUST build the AI prompt with this combo � if the prompt describes one
     // wall pair while the composite shows the other, FLUX repaints a scrambled
     // patchwork of panels trying to satisfy both.
-    res.json({ composite, mask, combo });
+    res.json({ composite, mask, glassMask, shadowMask, combo, fit });
   } catch (err) {
     console.error("[render] error:", err.message);
     res.status(500).json({ error: err.message });

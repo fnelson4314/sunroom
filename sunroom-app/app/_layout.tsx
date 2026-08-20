@@ -24,6 +24,9 @@ export default function RootLayout() {
           name="configure"
           options={{ title: "Configure", headerLeft: () => null }}
         />
+        {/* Preview keeps its back arrow on purpose: going back returns to the
+            still-mounted configurator with all state intact. */}
+        <Stack.Screen name="preview" options={{ title: "Preview" }} />
         <Stack.Screen
           name="generate"
           options={{ title: "Generating", headerLeft: () => null }}

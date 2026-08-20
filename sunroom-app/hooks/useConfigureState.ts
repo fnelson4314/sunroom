@@ -35,6 +35,64 @@ export type GableGlassConfig = {
 
 export type DoorStyle = "sliding" | "entry" | "storm" | "french";
 
+/**
+ * Gable/wing glass follows the BASE wall type: a G1-insulated wall gets Comfort
+ * G1 gable glass, a single-pane wall gets uninsulated single pane. It is NOT an
+ * independent choice — the UI only picks glass vs solid — so it is derived here
+ * rather than stored, which also keeps the priced option in step with the price
+ * note WallBuilder shows (getGlassOptionName mirrors this test).
+ */
+export function gableGlassTypeForWallType(
+  wallTypeName?: string | null,
+): "uninsulated" | "g1" {
+  const l = (wallTypeName || "").toLowerCase();
+  return l.includes("6") ||
+    l.includes("all-season") ||
+    l.includes("g1") ||
+    l.includes("insulated")
+    ? "g1"
+    : "uninsulated";
+}
+
+/**
+ * Replace ONE wall's priced gable/wing add-on in `wallOptions`. Shared by the
+ * glass-room setter, the screen-room setter and setWallType (which must re-price
+ * when the base wall type changes), so a gable can never be priced as one glass
+ * grade while the wall is another.
+ *
+ * `priceGlass=false` for SCREEN rooms: their non-solid gable is screen mesh, not
+ * glass — there is no catalog line for it, and charging the $2.5k glass option
+ * would be flatly wrong. Solid wing panels are priced for both room types.
+ */
+function applyGableAddOn(
+  wallId: string,
+  config: GableGlassConfig | null,
+  wallOptions: Record<string, string>,
+  allOptions: Option[],
+  priceGlass = true,
+): Record<string, string> {
+  const next = { ...wallOptions };
+  const find = (s: string) => allOptions.find((o) => o.name.includes(s));
+  const uninsulatedOpt = find("Gable or Wing Glass Uninsulated");
+  const g1Opt = find("Gable or Wing Glass Comfort");
+  const solidOpt = find("Solid Wing Panel");
+
+  [uninsulatedOpt, g1Opt, solidOpt].forEach((o) => {
+    if (o) delete next[o.id];
+  });
+  if (!config) return next;
+
+  if (config.glassType === "solid") {
+    // Fixed price regardless of pane count — B (gable) is 2 pieces, wings are 1.
+    if (solidOpt) next[solidOpt.id] = wallId === "B" ? "2" : "1";
+    return next;
+  }
+  if (!priceGlass) return next;
+  const glassOpt = config.glassType === "g1" ? g1Opt : uninsulatedOpt;
+  if (glassOpt) next[glassOpt.id] = String(config.count); // priced per pane
+  return next;
+}
+
 // ─── Screen room types ────────────────────────────────────────────────────────
 
 export type ScreenUnitType = "screen" | "door";
@@ -325,6 +383,73 @@ const initialState: ConfigureState = {
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
+// ─── Wall dimensions are shared by both builders ─────────────────────────────
+// Width/height describe the PHYSICAL wall, not the product line, so an edit in
+// either builder writes both state.walls (glass) and screenRoom.walls (screen).
+// They used to be independent, and the renderer solves the PnP camera purely
+// from the wall widths (getPnPDims in sunroom-3d/server.js) — so two builders
+// holding two footprints meant the SAME plotted points produced two different
+// camera poses, and the composite came out rotated when the line was switched.
+// Only the unit layout differs per builder, so each side re-divides its own.
+//
+// Deliberately EDIT-TIME ONLY. Syncing on load or on a product-line switch was
+// tried and reverted: it silently overwrites dimensions the user entered in the
+// other builder, which spreads whichever footprint is wrong instead of fixing
+// it. A dimension that disagrees with the plotted points has to be retyped —
+// nothing here can know which of the two sets matches the photo.
+
+function applyGlassDim(
+  w: WallSelection,
+  field: "widthIn" | "heightIn",
+  value: string,
+): WallSelection {
+  if (field !== "widthIn") return { ...w, [field]: value };
+  const totalIn = parseFloat(value) || 0;
+  const locked =
+    w.unitLocked.length === w.unitWidths.length
+      ? w.unitLocked
+      : Array(w.units).fill(false);
+  const lockedTotal = w.unitWidths.reduce(
+    (s, uw, i) => (locked[i] ? s + (parseFloat(uw) || 0) : s),
+    0,
+  );
+  const unlockedCount = locked.filter((l) => !l).length;
+  const remaining = totalIn - lockedTotal;
+  const evenWidth =
+    unlockedCount > 0 && remaining > 0
+      ? String(Math.round((remaining / unlockedCount) * 10) / 10)
+      : totalIn > 0
+        ? String(Math.round((totalIn / w.units) * 10) / 10)
+        : "";
+  const newWidths = Array.from({ length: w.units }, (_, i) =>
+    locked[i] ? w.unitWidths[i] : evenWidth,
+  );
+  return { ...w, widthIn: value, unitWidths: newWidths };
+}
+
+function applyScreenDim(
+  w: ScreenWallSelection,
+  field: "widthIn" | "heightIn",
+  value: string,
+): ScreenWallSelection {
+  if (field !== "widthIn") return { ...w, heightIn: value };
+  const { unitWidths, unitTypes, unitLocked } = recalcScreenUnits(
+    value,
+    w.unitTypes,
+  );
+  return {
+    ...w,
+    widthIn: value,
+    unitWidths,
+    unitTypes,
+    unitLocked,
+    // Keep gable glass pane count in sync with unit count
+    gableGlass: w.gableGlass
+      ? { ...w.gableGlass, count: unitWidths.length }
+      : null,
+  };
+}
+
 export function useConfigureState() {
   const [state, setState] = useState<ConfigureState>(initialState);
 
@@ -338,6 +463,7 @@ export function useConfigureState() {
       if (prev.selectedProductLine && prev.wallType) {
         byLine[prev.selectedProductLine.id] = prev.wallType;
       }
+
       return {
         ...prev,
         selectedProductLine: pl,
@@ -499,39 +625,25 @@ export function useConfigureState() {
 
   // ─── Screen room setters ───────────────────────────────────────────────────
 
-  const setScreenWallDimension = (
+  // Writes BOTH builders — see applyGlassDim/applyScreenDim above.
+  const setWallDimension = (
     wallId: "A" | "B" | "C",
     field: "widthIn" | "heightIn",
     value: string,
   ) =>
     setState((prev) => ({
       ...prev,
+      walls: prev.walls.map((w) =>
+        w.id === wallId ? applyGlassDim(w, field, value) : w,
+      ),
       screenRoom: {
         ...prev.screenRoom,
-        walls: prev.screenRoom.walls.map((w) => {
-          if (w.id !== wallId) return w;
-          if (field === "widthIn") {
-            const { unitWidths, unitTypes, unitLocked } = recalcScreenUnits(
-              value,
-              w.unitTypes,
-            );
-            // Keep gable glass pane count in sync with unit count
-            const newGable = w.gableGlass
-              ? { ...w.gableGlass, count: unitWidths.length }
-              : null;
-            return {
-              ...w,
-              widthIn: value,
-              unitWidths,
-              unitTypes,
-              unitLocked,
-              gableGlass: newGable,
-            };
-          }
-          return { ...w, heightIn: value };
-        }),
+        walls: prev.screenRoom.walls.map((w) =>
+          w.id === wallId ? applyScreenDim(w, field, value) : w,
+        ),
       },
     }));
+  const setScreenWallDimension = setWallDimension;
 
   const setScreenUnitWidth = (
     wallId: "A" | "B" | "C",
@@ -650,32 +762,53 @@ export function useConfigureState() {
       },
     }));
 
+  // Screen-room wing/gable. Unlike the glass-room setter this one used to skip
+  // wallAddOns entirely, so a SOLID wing on a screen room was configured, drawn
+  // and quoted at $0 — it never reached pricing or the summary (user 2026-08-15).
+  // The material is one choice for the whole room, so every wall's add-on is
+  // re-synced, not just the edited one.
   const setScreenGableGlass = (
     wallId: "A" | "B" | "C",
     config: GableGlassConfig | null,
+    allOptions: Option[],
   ) =>
-    setState((prev) => ({
-      ...prev,
-      screenRoom: {
-        ...prev.screenRoom,
-        walls: prev.screenRoom.walls.map((w) => {
-          if (w.id === wallId) return { ...w, gableGlass: config };
-          // The wing MATERIAL is one choice for the whole room — pick solid on
-          // A and C follows. Pane count stays per-wall (it tracks that wall's
-          // own unit count). Walls with no wing config are left alone, so
-          // initialising one wall can never invent a wing on another.
-          if (!w.gableGlass || !config) return w;
-          return {
-            ...w,
-            gableGlass: {
-              ...w.gableGlass,
-              glassType: config.glassType,
-              solidStyle: config.solidStyle,
-            },
-          };
-        }),
-      },
-    }));
+    setState((prev) => {
+      const walls = prev.screenRoom.walls.map((w) => {
+        if (w.id === wallId) return { ...w, gableGlass: config };
+        // The wing MATERIAL is one choice for the whole room — pick solid on
+        // A and C follows. Pane count stays per-wall (it tracks that wall's
+        // own unit count). Walls with no wing config are left alone, so
+        // initialising one wall can never invent a wing on another.
+        if (!w.gableGlass || !config) return w;
+        return {
+          ...w,
+          gableGlass: {
+            ...w.gableGlass,
+            glassType: config.glassType,
+            solidStyle: config.solidStyle,
+          },
+        };
+      });
+
+      const wallAddOns = { ...prev.wallAddOns };
+      walls.forEach((w) => {
+        // priceGlass=false: a screen room's non-solid wing is screen mesh, which
+        // has no catalog line — only solid wing panels are charged.
+        wallAddOns[w.id] = applyGableAddOn(
+          w.id,
+          w.gableGlass,
+          wallAddOns[w.id] || {},
+          allOptions,
+          false,
+        );
+      });
+
+      return {
+        ...prev,
+        screenRoom: { ...prev.screenRoom, walls },
+        wallAddOns,
+      };
+    });
 
   // Structure-wide solid style, shared across every solid section of the feature.
   const setSolidStyle = (
@@ -732,59 +865,48 @@ export function useConfigureState() {
 
   // ─── Wall setters ──────────────────────────────────────────────────────────
 
-  const setWallType = (option: Option) =>
-    setState((prev) => ({
-      ...prev,
-      wallType: option,
-      // Remember this choice for the current product line so it's restored on
-      // switching back to this line later.
-      wallTypeByLine: prev.selectedProductLine
-        ? { ...prev.wallTypeByLine, [prev.selectedProductLine.id]: option }
-        : prev.wallTypeByLine,
-      // Reset frame color when switching away from a tan/bronze wall type.
-      // Default to "tan" when switching INTO a tan/bronze type so the canvas
-      // immediately reflects the frame color instead of staying white.
-      wallColor: /tan|bronze/i.test(option.name)
-        ? (prev.wallColor ?? "tan")
-        : null,
-    }));
+  const setWallType = (option: Option, allOptions: Option[] = []) =>
+    setState((prev) => {
+      // Gable/wing glass GRADE follows the base wall type, so switching the wall
+      // type after configuring a gable has to re-grade it AND re-price it —
+      // otherwise a G1 room keeps quoting the cheaper single-pane gable option.
+      const grade = gableGlassTypeForWallType(option.name);
+      const walls = prev.walls.map((w) =>
+        w.gableGlass && w.gableGlass.glassType !== "solid"
+          ? { ...w, gableGlass: { ...w.gableGlass, glassType: grade } }
+          : w,
+      );
+      const wallAddOns = { ...prev.wallAddOns };
+      if (allOptions.length) {
+        walls.forEach((w) => {
+          if (!w.gableGlass) return;
+          wallAddOns[w.id] = applyGableAddOn(
+            w.id,
+            w.gableGlass,
+            wallAddOns[w.id] || {},
+            allOptions,
+          );
+        });
+      }
 
-  const setWallDimension = (
-    wallId: "A" | "B" | "C",
-    field: "widthIn" | "heightIn",
-    value: string,
-  ) => {
-    setState((prev) => ({
-      ...prev,
-      walls: prev.walls.map((w) => {
-        if (w.id !== wallId) return w;
-        if (field === "widthIn") {
-          const totalIn = parseFloat(value) || 0;
-          const locked =
-            w.unitLocked.length === w.unitWidths.length
-              ? w.unitLocked
-              : Array(w.units).fill(false);
-          const lockedTotal = w.unitWidths.reduce(
-            (s, uw, i) => (locked[i] ? s + (parseFloat(uw) || 0) : s),
-            0,
-          );
-          const unlockedCount = locked.filter((l) => !l).length;
-          const remaining = totalIn - lockedTotal;
-          const evenWidth =
-            unlockedCount > 0 && remaining > 0
-              ? String(Math.round((remaining / unlockedCount) * 10) / 10)
-              : totalIn > 0
-                ? String(Math.round((totalIn / w.units) * 10) / 10)
-                : "";
-          const newWidths = Array.from({ length: w.units }, (_, i) =>
-            locked[i] ? w.unitWidths[i] : evenWidth,
-          );
-          return { ...w, widthIn: value, unitWidths: newWidths };
-        }
-        return { ...w, [field]: value };
-      }),
-    }));
-  };
+      return {
+        ...prev,
+        wallType: option,
+        walls,
+        wallAddOns,
+        // Remember this choice for the current product line so it's restored on
+        // switching back to this line later.
+        wallTypeByLine: prev.selectedProductLine
+          ? { ...prev.wallTypeByLine, [prev.selectedProductLine.id]: option }
+          : prev.wallTypeByLine,
+        // Reset frame color when switching away from a tan/bronze wall type.
+        // Default to "tan" when switching INTO a tan/bronze type so the canvas
+        // immediately reflects the frame color instead of staying white.
+        wallColor: /tan|bronze/i.test(option.name)
+          ? (prev.wallColor ?? "tan")
+          : null,
+      };
+    });
 
   // Global default transom height (inches) — applies to all units unless overridden
   const setDefaultTransomHeight = (value: string) =>
@@ -877,47 +999,29 @@ export function useConfigureState() {
     allOptions: Option[],
   ) => {
     setState((prev) => {
+      // Glass grade is not the caller's to choose — force it to whatever the
+      // base wall type implies (callers pass a placeholder "uninsulated").
+      const resolved: GableGlassConfig | null = config
+        ? {
+            ...config,
+            glassType:
+              config.glassType === "solid"
+                ? "solid"
+                : gableGlassTypeForWallType(prev.wallType?.name),
+          }
+        : null;
+
       const updatedWalls = prev.walls.map((w) =>
-        w.id === wallId ? { ...w, gableGlass: config } : w,
+        w.id === wallId ? { ...w, gableGlass: resolved } : w,
       );
 
       const wallAddOns = { ...prev.wallAddOns };
-      const wallOptions = { ...(wallAddOns[wallId] || {}) };
-
-      const uninsulatedOpt = allOptions.find((o) =>
-        o.name.includes("Gable or Wing Glass Uninsulated"),
+      wallAddOns[wallId] = applyGableAddOn(
+        wallId,
+        resolved,
+        wallAddOns[wallId] || {},
+        allOptions,
       );
-      const g1Opt = allOptions.find((o) =>
-        o.name.includes("Gable or Wing Glass Comfort"),
-      );
-      const solidOpt = allOptions.find((o) =>
-        o.name.includes("Solid Wing Panel"),
-      );
-
-      if (uninsulatedOpt) delete wallOptions[uninsulatedOpt.id];
-      if (g1Opt) delete wallOptions[g1Opt.id];
-      if (solidOpt) delete wallOptions[solidOpt.id];
-
-      if (config) {
-        const targetOpt =
-          config.glassType === "uninsulated"
-            ? uninsulatedOpt
-            : config.glassType === "g1"
-              ? g1Opt
-              : solidOpt;
-        if (targetOpt) {
-          if (config.glassType === "solid") {
-            // Solid panel: fixed price regardless of pane count.
-            // B wall (gable): 2 pieces. Wing walls (A/C): 1 piece.
-            wallOptions[targetOpt.id] = wallId === "B" ? "2" : "1";
-          } else {
-            // Glass: priced per pane
-            wallOptions[targetOpt.id] = String(config.count);
-          }
-        }
-      }
-
-      wallAddOns[wallId] = wallOptions;
       return { ...prev, walls: updatedWalls, wallAddOns };
     });
   };
@@ -1216,6 +1320,39 @@ export function useConfigureState() {
     return state.roofType.unit_price * (width + 2) * (depth + 1);
   };
 
+  // The walls the CURRENT room type actually uses. Screen rooms keep their own
+  // wall array; everything else uses state.walls. Anything that prices or lists
+  // per-wall data must go through this or screen rooms silently price nothing.
+  const activeWalls = (): { id: string; widthIn: string; heightIn: string }[] =>
+    state.selectedProductLine?.wall_system === "2_inch"
+      ? state.screenRoom.walls
+      : state.walls;
+
+  /**
+   * Underbuild wall up-charge — AUTOMATIC for under-existing 4"/6" rooms (it used
+   * to be a hand-checked line in Wall → Additional Options, which meant it was
+   * routinely missed). Quantity is wall AREA: the sum over every designed wall of
+   * width x height in feet, each dimension rounded up the usual way (a 7'2" wall
+   * counts as 8). Returns null when it doesn't apply so callers can skip the line.
+   */
+  const getUnderbuildCharge = (
+    allOptions: Option[],
+  ): { option: Option; qty: number; amount: number } | null => {
+    if (state.roofStyle !== "under_existing") return null;
+    const ws = state.selectedProductLine?.wall_system;
+    if (ws !== "4_inch" && ws !== "6_inch") return null;
+    const option = allOptions.find((o) =>
+      o.name.includes("Underbuild Wall Up Charge"),
+    );
+    if (!option) return null;
+    const qty = activeWalls().reduce(
+      (s, w) => s + inToCeilFt(w.widthIn) * inToCeilFt(w.heightIn),
+      0,
+    );
+    if (qty <= 0) return null;
+    return { option, qty, amount: option.unit_price * qty };
+  };
+
   const calculateTotal = (allOptions: Option[]): number => {
     let total = 0;
     const getOption = (id: string) => allOptions.find((o) => o.id === id);
@@ -1293,7 +1430,7 @@ export function useConfigureState() {
       total += option.unit_price * (parseFloat(qty) || 0);
     });
 
-    state.walls.forEach((wall) => {
+    activeWalls().forEach((wall) => {
       const wFt = inToCeilFt(wall.widthIn);
       const hFt = inToCeilFt(wall.heightIn);
       const wallSqft = wFt * hFt;
@@ -1315,6 +1452,9 @@ export function useConfigureState() {
       if (!option) return;
       total += option.unit_price * (parseFloat(qty) || 0);
     });
+
+    const underbuild = getUnderbuildCharge(allOptions);
+    if (underbuild) total += underbuild.amount;
 
     return total;
   };
@@ -1437,7 +1577,7 @@ export function useConfigureState() {
         });
     });
 
-    state.walls.forEach((wall) => {
+    activeWalls().forEach((wall) => {
       const wallOptions = state.wallAddOns[wall.id] || {};
       const wFt = inToCeilFt(wall.widthIn);
       const hFt = inToCeilFt(wall.heightIn);
@@ -1471,6 +1611,14 @@ export function useConfigureState() {
           detail: `${quantity} ${option.unit_type.replace(/_/g, " ")}`,
         });
     });
+
+    const underbuild = getUnderbuildCharge(allOptions);
+    if (underbuild)
+      items.push({
+        name: underbuild.option.name,
+        amount: underbuild.amount,
+        detail: `${underbuild.qty} sq ft (width x height of every wall, auto)`,
+      });
 
     return items;
   };

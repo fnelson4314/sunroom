@@ -57,6 +57,12 @@ export function renderKey(params: Record<string, unknown>): string {
 type DesignSessionValue = {
   draftId: string | null;
   setDraftId: (id: string | null) => void;
+  // The house photo for this design. Lives here and NOT in navigation params:
+  // on web a captured photo is a multi-megabyte `data:` URI, and expo-router
+  // serializes every param into the URL — `new URL()` then throws
+  // ("... is not a valid URL") and navigation dies. Screens read it from here.
+  photoUri: string;
+  setPhotoUri: (uri: string) => void;
   // Furthest step reached (index into FLOW_STEPS). The back-nav menu only lets
   // you jump to steps <= this.
   furthestStep: number;
@@ -71,6 +77,8 @@ type DesignSessionValue = {
 const DesignSessionContext = createContext<DesignSessionValue>({
   draftId: null,
   setDraftId: () => {},
+  photoUri: "",
+  setPhotoUri: () => {},
   furthestStep: 0,
   reachStep: () => {},
   lastRender: null,
@@ -80,6 +88,7 @@ const DesignSessionContext = createContext<DesignSessionValue>({
 
 export function DesignSessionProvider({ children }: { children: ReactNode }) {
   const [draftId, setDraftId] = useState<string | null>(null);
+  const [photoUri, setPhotoUri] = useState("");
   const [furthestStep, setFurthestStep] = useState(0);
   const [lastRender, setLastRender] = useState<LastRender>(null);
 
@@ -88,6 +97,7 @@ export function DesignSessionProvider({ children }: { children: ReactNode }) {
 
   const resetSession = (id: string | null = null) => {
     setDraftId(id);
+    setPhotoUri("");
     setFurthestStep(0);
     setLastRender(null);
   };
@@ -97,6 +107,8 @@ export function DesignSessionProvider({ children }: { children: ReactNode }) {
       value={{
         draftId,
         setDraftId,
+        photoUri,
+        setPhotoUri,
         furthestStep,
         reachStep,
         lastRender,

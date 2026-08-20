@@ -14,7 +14,18 @@ def _frame_color_word(wall_color: str) -> str:
     both product lines). Say "light cream" so the text description matches
     the now-lighter composite pixels instead of pulling against them."""
     color = (wall_color or "white").strip().lower()
-    return "light cream" if color == "tan" else color
+    # Tan wording ladder — measured against the real installed photos, 2026-08-19.
+    # The WORD dominates here: swapping fcHex barely moved the rendered tone while
+    # each of these changed it completely, so tune the word first.
+    #   "tan"                  → medium khaki (pre-2026-07-14)
+    #   "light cream"          → plastic YELLOW; the cartoonish look users flagged
+    #   "soft warm grey-beige" → near-WHITE, lost the tan identity entirely
+    #   "warm sandstone beige" → saturated ORANGE-tan, overshot the other way
+    #   "pale almond"          → current. Almond is the industry colour name for
+    #                            this finish, so the model has seen it on real
+    #                            window products; our installs photograph as a
+    #                            light, barely-warm, low-saturation almond.
+    return "pale almond" if color == "tan" else color
 
 # Built per-render with the ACTUAL frame colour so it never conflicts with the
 # config (was hardcoded "white ... brick house"). Matches the LoRA's training
@@ -406,10 +417,129 @@ def build_wall_description(wall_data: str, wall_combo: str = None) -> str:
     return out
 
 
+# Board widths MUST match scene.html's lapCourseYs(): vinyl 4in, hardieboard 8in.
+# The composite already draws the right course spacing AND a distinct colour per
+# style (kneewallHex), but a generic "lap siding" instruction let the model copy
+# the HOUSE's siding instead — narrow vinyl courses rendered over a hardieboard
+# kneewall (user 2026-08-19). Naming the width in the text locks the pixels in.
+_KONTEXT_SOLID_STYLE = {
+    "vinyl": "narrow 4-inch horizontal vinyl lap courses",
+    "hardieboard": "wide 8-inch horizontal fiber-cement hardieboard lap courses",
+    "panel": "a smooth flat aluminum panel with no lap courses",
+}
+
+# An editing model needs the door TYPE named or it invents one. A sliding patio
+# door in particular was coming back hallucinated (user 2026-08-19) because the
+# instruction only said "glass door".
+_KONTEXT_DOOR_STYLE = {
+    "sliding": (
+        "a sliding patio door: one fixed glass panel and one that slides across "
+        "it on a track inside a single frame, meeting at the one vertical stile "
+        "where it is drawn, with the pull handle on the sliding panel"
+    ),
+    "french": (
+        "french double doors: two hinged full-height glass doors meeting at the "
+        "centre with a pair of vertical handles"
+    ),
+    "entry": "a single hinged entry door with a glass lite and a lever handle",
+    "storm": "a hinged storm door with a full glass lite",
+    "screen": (
+        "a hinged full-view screen door with a single horizontal mid rail and a "
+        "lever handle"
+    ),
+}
+
+
+def _kontext_config_details(wall_data: str, is_screen: bool = False) -> tuple[str, str]:
+    """(kneewall/transom material clause, door clause) read from the SAME config
+    the composite is drawn from, so the text reinforces the pixels instead of
+    competing with them. Empty strings when the feature isn't present — never
+    describe a door or a solid kneewall that isn't there."""
+    if not wall_data:
+        return "", ""
+    try:
+        walls = json.loads(wall_data) or []
+    except Exception:
+        logger.warning("kontext: could not parse wall_data — skipping material detail")
+        return "", ""
+
+    knee_styles, transom_styles, door_styles = set(), set(), set()
+    wing_kinds = set()
+    for wall in walls:
+        panel_types = wall.get("panelTypes", []) or []
+        materials = wall.get("unitMaterials", []) or []
+        doors = wall.get("unitDoorStyles", []) or []
+        gable = wall.get("gableGlass")
+        if gable:
+            gt = str(gable.get("glassType") or "").lower()
+            if gt == "solid":
+                wing_kinds.add(("solid", (gable.get("solidStyle") or "panel").lower()))
+            else:
+                wing_kinds.add(("screen" if is_screen else "glass", ""))
+        for i, pt in enumerate(panel_types):
+            mat = materials[i] if i < len(materials) else {}
+            if mat.get("kneewall") == "solid":
+                knee_styles.add((mat.get("kneewallSolidStyle") or "panel").lower())
+            if mat.get("transom") == "solid":
+                transom_styles.add((mat.get("transomSolidStyle") or "panel").lower())
+            if "door" in str(pt) and i < len(doors) and doors[i]:
+                door_styles.add(str(doors[i]).lower())
+
+    parts = []
+    for label, styles in (("kneewall", knee_styles), ("transom band", transom_styles)):
+        for st in sorted(styles):
+            phrase = _KONTEXT_SOLID_STYLE.get(st)
+            if phrase:
+                depth = (
+                    ", each course casting a soft shadow line along its lower edge"
+                ) if st in ("vinyl", "hardieboard") else ""
+                parts.append(
+                    f"the solid {label} is {phrase}, painted in a colour that "
+                    f"complements the house{depth}"
+                )
+    material_detail = "; ".join(parts)
+
+    door_bits = [
+        f"the door drawn on the wall is {_KONTEXT_DOOR_STYLE[d]}"
+        for d in sorted(door_styles)
+        if d in _KONTEXT_DOOR_STYLE
+    ]
+    if door_styles:
+        door_bits.append("the only door is the one drawn; every other opening is a window")
+    door_detail = "; ".join(door_bits)
+
+    # The gable/wing triangle above the walls was never described at all, so the
+    # model defaulted to solid siding there — a screen room kept coming back with
+    # a solid wing (user 2026-08-19). Name it explicitly.
+    wing_bits = []
+    for kind, style in sorted(wing_kinds):
+        if kind == "screen":
+            wing_bits.append(
+                "the triangular wing/gable area above the walls is insect screen "
+                "mesh exactly like the walls below it — not solid siding, not glass"
+            )
+        elif kind == "glass":
+            wing_bits.append(
+                "the gable above the walls is glass over its whole drawn shape, "
+                "including the flat band across its base where it is drawn "
+                "five-sided, with the framing divisions drawn there"
+            )
+        else:
+            phrase = _KONTEXT_SOLID_STYLE.get(style, "a smooth flat panel")
+            wing_bits.append(
+                f"the triangular gable/wing area above the walls is solid and is {phrase}"
+            )
+    if wing_bits:
+        material_detail = "; ".join(filter(None, [material_detail, *wing_bits]))
+
+    return material_detail, door_detail
+
+
 def build_kontext_instruction(
     wall_system: str = "",
     wall_color: str = "white",
     roof_style: str = "",
+    wall_data: str = "",
 ) -> str:
     """Edit instruction for FLUX Kontext (FLUX_REPAINT_MODE=kontext).
 
@@ -432,25 +562,51 @@ def build_kontext_instruction(
         #   "interior faintly visible"        → bright creamy lit-room glow
         #   "interior unlit and shaded"       → still a lit room
         #   "stay as dark as they are drawn"  → flat DEAD-dark panes, no life
-        # What reads real: DARK glass carrying sky/yard REFLECTIONS, interior
-        # only hinted. Reflections are the non-negotiable part.
-        "panels drawn as glass become dark tinted reflective glass like real "
-        "sunroom glazing photographed in daylight: every pane carries a soft "
-        "reflection of the sky and yard, and the unlit shaded interior is only "
-        "faintly hinted behind the reflections; panels drawn as solid or white "
-        "stay solid; windows drawn with an offset sliding half-pane KEEP that "
-        "visible two-pane sliding sash split — do not merge them into one "
-        "sheet of glass; any glass door keeps full-height glass running all "
-        "the way down to the floor exactly as drawn — no kneewall and no solid "
-        "panel on the door, even when the panels beside it have one — with a "
-        "slim white vertical pull handle exactly where drawn"
+        # That round settled on DARK reflective glass, interior only hinted.
+        #
+        # OVERTURNED 2026-08-19, and deliberately — read this before reverting.
+        # Those trials optimised for "looks like a real photo" in the abstract.
+        # Put side by side with the REAL installed job from the same session
+        # (LORA_review/identity_gap.html), dark-tinted glass is simply not the
+        # product we sell: our installs show CLEAR glass with the room plainly
+        # visible through it — furniture, floor, the house wall behind. The
+        # instruction was steering the model away from our own product, and the
+        # paired LoRA's whole appeal turned out to be that it had learned to
+        # CONTRADICT this sentence. Verified on flux-kontext-dev, same composite
+        # and seed, changing only this clause: interior became visible, the
+        # kneewall picked up house-matching lap siding, per-unit sash frames and
+        # a door handle appeared. Closes most of the identity gap for $0.03.
+        # The old failure modes are avoided by naming CONCRETE objects seen
+        # through the glass rather than brightness ("creamy glow" came from
+        # asking for luminance; this asks for contents).
+        # AFFIRMATIVE and SHORT, rewritten 2026-08-19 after this clause grew to
+        # 3148 chars with 21 negations and started contradicting itself: a blanket
+        # "never add a divider" cancelled the sliding-sash-split rule (operable
+        # windows lost their splits) and "not french doors" / "no kneewall on the
+        # door" handed the model the exact nouns it then drew — the same trap
+        # QUALITY_SUFFIX documents ("FLUX latches onto the noun, not the not").
+        # Say what IS there. Every rule here is scoped to "as drawn" so it reads
+        # the composite instead of competing with it. If you add a case, REPLACE a
+        # sentence rather than appending one.
+        "panels drawn as glass become clear low-tint glass with the room visible "
+        "through it — furniture, the floor, the wall behind — under a light sky "
+        "sheen across the top of each pane; panels drawn as solid or white stay "
+        "solid in the colour they are drawn; a window drawn with an offset "
+        "half-pane keeps that two-pane sliding sash split; a glass door is glass "
+        "from the floor to its head rail with a slim vertical pull handle where "
+        "drawn, and the kneewall band ends at each side of that door so the "
+        "door's glass reaches the ground"
     )
     roof_clause = (
         "the existing house roof above it stays completely unchanged"
         if roof_style == "under_existing" else
         "the drawn roof becomes dark asphalt shingles with fine horizontal "
-        "courses matching the existing house roof"
+        "courses matching the existing house roof, with a white fascia and "
+        "gutter along the eave"
     )
+
+    material_detail, door_detail = _kontext_config_details(wall_data, is_screen)
+    extra = "".join(f" {d[0].upper()}{d[1:]}." for d in (material_detail, door_detail) if d)
 
     return (
         f"Turn the 3D-rendered {noun} overlay in this photo into a photorealistic "
@@ -458,7 +614,7 @@ def build_kontext_instruction(
         "photographed. Keep its exact geometry: every frame, mullion, panel, "
         "kneewall, transom, and door stays exactly where and how it is drawn — do "
         f"not add, remove, move, or resize anything. {material_clause}; "
-        f"{roof_clause}. Keep the house, yard, and everything outside the "
+        f"{roof_clause}.{extra} Keep the house, yard, and everything outside the "
         "structure completely unchanged."
     )
 

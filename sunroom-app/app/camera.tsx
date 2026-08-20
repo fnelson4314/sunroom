@@ -322,8 +322,12 @@ export default function CameraScreen() {
   );
 
   const params = useLocalSearchParams<{ draftId?: string }>();
-  const { draftId: sessionDraftId, reachStep, resetSession } =
-    useDesignSession();
+  const {
+    draftId: sessionDraftId,
+    reachStep,
+    resetSession,
+    setPhotoUri: setSessionPhoto,
+  } = useDesignSession();
   // A draftId to carry forward: the one we were opened with (returning to edit
   // points) or the shared session's.
   const draftId = params.draftId || sessionDraftId || "";
@@ -550,8 +554,11 @@ export default function CameraScreen() {
       ),
     );
 
+    // The photo goes through the shared session, NOT a route param — on web it
+    // is a multi-MB data: URI and expo-router puts every param in the URL.
+    setSessionPhoto(photoUri);
+
     const configureParams = {
-      photoUri,
       box_x1: String(box_x1),
       box_y1: String(box_y1),
       box_x2: String(box_x2),
@@ -925,10 +932,12 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.3)",
     marginHorizontal: 4,
   },
+  // Camera-screen controls are used one-handed outdoors, often in gloves/sun —
+  // touch targets bumped up across the board (2026-08-15).
   wallCountBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 24,
     backgroundColor: "rgba(255,255,255,0.15)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.3)",
@@ -939,7 +948,7 @@ const styles = StyleSheet.create({
   },
   wallCountBtnText: {
     color: "#fff",
-    fontSize: FontSize.body,
+    fontSize: FontSize.callout,
     fontWeight: "600",
   },
   wallCountBtnTextActive: { color: "#fff" },
@@ -949,9 +958,9 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   buildTypeBtn: {
-    paddingHorizontal: 18,
-    paddingVertical: 9,
-    borderRadius: 22,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 26,
     backgroundColor: "rgba(255,255,255,0.15)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.35)",
@@ -978,14 +987,14 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   subTypeBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 18,
+    paddingHorizontal: 20,
+    paddingVertical: 11,
+    borderRadius: 22,
     backgroundColor: "rgba(255,255,255,0.15)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.3)",
   },
-  subTypeBtnText: { color: "#fff", fontSize: FontSize.body, fontWeight: "600" },
+  subTypeBtnText: { color: "#fff", fontSize: FontSize.callout, fontWeight: "600" },
   cameraFooter: {
     position: "absolute",
     bottom: 0,
@@ -1011,9 +1020,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
   },
   captureButton: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 88,
+    height: 88,
+    borderRadius: 44,
     backgroundColor: "rgba(255,255,255,0.3)",
     alignItems: "center",
     justifyContent: "center",
@@ -1021,15 +1030,20 @@ const styles = StyleSheet.create({
     borderColor: "#fff",
   },
   captureInner: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
     backgroundColor: "#fff",
   },
-  uploadButton: { width: 100, alignItems: "center", justifyContent: "center" },
+  uploadButton: {
+    width: 116,
+    paddingVertical: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   uploadButtonText: {
     color: "#fff",
-    fontSize: FontSize.body,
+    fontSize: FontSize.callout,
     fontWeight: "500",
     textAlign: "center",
   },
@@ -1059,8 +1073,8 @@ const styles = StyleSheet.create({
   button: {
     flex: 1,
     backgroundColor: Colors.primary,
-    padding: 16,
-    borderRadius: 12,
+    padding: 20,
+    borderRadius: 14,
     alignItems: "center",
   },
   buttonDisabled: { opacity: 0.4 },
@@ -1068,8 +1082,8 @@ const styles = StyleSheet.create({
   secondaryButton: {
     flex: 1,
     backgroundColor: "rgba(255,255,255,0.2)",
-    padding: 16,
-    borderRadius: 12,
+    padding: 20,
+    borderRadius: 14,
     alignItems: "center",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.4)",

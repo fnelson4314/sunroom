@@ -22,7 +22,6 @@ export default function EditorScreen() {
     sessionId,
     renderUrl,
     renderUrls,
-    photoUri,
     draftId,
     box_x1,
     box_y1,
@@ -34,7 +33,6 @@ export default function EditorScreen() {
     sessionId: string;
     renderUrl: string;
     renderUrls: string;
-    photoUri: string;
     draftId: string;
     box_x1: string;
     box_y1: string;
@@ -45,7 +43,7 @@ export default function EditorScreen() {
   }>();
 
   const navigation = useNavigation();
-  const { reachStep, setDraftId, setLastRender, lastRender } =
+  const { reachStep, setDraftId, setLastRender, lastRender, photoUri } =
     useDesignSession();
 
   useLayoutEffect(() => {
@@ -119,7 +117,6 @@ export default function EditorScreen() {
       params: {
         sessionId,
         renderUrl: selectedUrl ?? "",
-        photoUri,
         totalPrice,
         priceBreakdown,
       },
@@ -130,7 +127,6 @@ export default function EditorScreen() {
     router.replace({
       pathname: "/configure",
       params: {
-        photoUri: photoUri ?? "",
         box_x1: box_x1 ?? "0",
         box_y1: box_y1 ?? "0",
         box_x2: box_x2 ?? "1",

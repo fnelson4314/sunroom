@@ -149,6 +149,64 @@ export const startGeneration = async (data: {
   }
 };
 
+/**
+ * 3D composite only — no AI, no credits. Used by the pre-generation preview so
+ * the salesperson can confirm the configured structure sits correctly on the
+ * house before spending a generation. Synchronous: resolves with the image URL.
+ */
+// How well the CONFIGURED structure fits the plotted markers. reprojErr is in
+// photo pixels — the PnP solve floors around ~16px on hand-clicked markers, so
+// a high value means no camera can align the box and the render comes out
+// tilted. drawnFt differs from configuredFt when the renderer overrode the
+// footprint to fit the photo.
+export type PreviewFit = {
+  reprojErr: number;
+  groundErr: number;
+  configuredHeightFt: number;
+  solvedHeightFt: number;
+  configuredFt: { side: number; front: number };
+  drawnFt: { side: number; front: number };
+};
+
+export type PreviewResult = { url: string; fit: PreviewFit | null };
+
+export const previewComposite = async (data: {
+  house_photo_url: string;
+  box_x1: number;
+  box_y1: number;
+  box_x2: number;
+  box_y2: number;
+  wall_data?: string;
+  wall_system?: string;
+  roof_style?: string;
+  wall_color?: string;
+  mount_height?: string;
+  projection_distance?: string;
+  include_gable_wings?: boolean;
+  wall_combo?: string | null;
+  wall_corners?: string;
+  screen_options?: string;
+}): Promise<PreviewResult> => {
+  // session_id/selected_options are required by the shared request model but
+  // unused by the preview (it writes no session row).
+  const response = await api.post(
+    "/generate/preview",
+    {
+      session_id: "00000000-0000-0000-0000-000000000000",
+      selected_options: [],
+      ...data,
+    },
+    // The only SYNCHRONOUS endpoint: mask prep, a Puppeteer render (which the
+    // backend itself allows 90s for, and which pays a browser cold-start on the
+    // first call) and two Supabase uploads all happen before it answers. The
+    // 30s default aborted the client while the render went on to succeed —
+    // "timeout of 30000ms exceeded" on a composite that was fine. Sit outside
+    // the backend's own budget so a real failure surfaces as a real error.
+    { timeout: 120000 },
+  );
+  return { url: response.data.composite_url, fit: response.data.fit ?? null };
+};
+
 export const getGenerationStatus = async (sessionId: string) => {
   const response = await api.get(`/generate/status/${sessionId}`);
   return response.data;

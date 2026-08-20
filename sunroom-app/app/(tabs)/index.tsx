@@ -2,6 +2,7 @@ import Card from "@/components/ui/Card";
 import ConfirmModal from "@/components/ui/ConfirmModal";
 import StatusBadge from "@/components/ui/StatusBadge";
 import { Colors } from "@/constants/Colors";
+import { useDesignSession } from "@/contexts/DesignSession";
 import { FontSize } from "@/constants/Typography";
 import { deleteSession, getSessionsBySalesperson } from "@/services/api";
 import { router } from "expo-router";
@@ -32,6 +33,7 @@ type Session = {
 };
 
 export default function HomeScreen() {
+  const { setPhotoUri } = useDesignSession();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -82,11 +84,13 @@ export default function HomeScreen() {
   };
 
   const handleContinueDraft = (item: Session) => {
+    // Clear the shared photo so configure falls back to the draft's stored one
+    // (the photo is never a route param — see DesignSession).
+    setPhotoUri("");
     // Navigate back to configure, passing the draftId so it can reload state
     router.push({
       pathname: "/configure",
       params: {
-        photoUri: "",
         box_x1: "0",
         box_y1: "0",
         box_x2: "1",

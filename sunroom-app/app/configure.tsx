@@ -9,8 +9,8 @@ import { Colors } from "@/constants/Colors";
 import { FontSize } from "@/constants/Typography";
 import FlowNav from "@/components/FlowNav";
 import { renderKey, useDesignSession } from "@/contexts/DesignSession";
-import type { Option } from "@/hooks/useConfigureState";
 import { confirmLeave } from "@/utils/confirm";
+import type { Option } from "@/hooks/useConfigureState";
 import { useConfigureState } from "@/hooks/useConfigureState";
 import {
   getFullCatalog,
@@ -48,7 +48,6 @@ const STEP_LABELS_MAP: Record<number, string> = {
 
 export default function ConfigureScreen() {
   const params = useLocalSearchParams<{
-    photoUri: string;
     box_x1: string;
     box_y1: string;
     box_x2: string;
@@ -70,8 +69,13 @@ export default function ConfigureScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const configure = useConfigureState();
   const navigation = useNavigation();
-  const { lastRender, reachStep, setDraftId: setSessionDraftId } =
-    useDesignSession();
+  const {
+    lastRender,
+    reachStep,
+    setDraftId: setSessionDraftId,
+    photoUri,
+    setPhotoUri,
+  } = useDesignSession();
 
   // Persists the active wall tab across step navigation so returning to step 5
   // always lands on the last wall the user was editing.
@@ -133,7 +137,6 @@ export default function ConfigureScreen() {
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [draftId, setDraftId] = useState<string | null>(params.draftId ?? null);
   const [sessionName, setSessionName] = useState("");
-  const [photoUri, setPhotoUri] = useState(params.photoUri ?? "");
   const [boxCoords, setBoxCoords] = useState({
     box_x1: params.box_x1 ?? "0",
     box_y1: params.box_y1 ?? "0",
@@ -224,10 +227,10 @@ export default function ConfigureScreen() {
           const meta = draft.draft_state._meta as
             | Record<string, string>
             | undefined;
-          // Prefer a photoUri passed in params (the persistent Supabase
+          // Prefer a photo already set on the session (the persistent Supabase
           // house_photo_url when reopening a completed session) over the draft's
           // stored _meta.photoUri, which is a local file URI that may be stale.
-          if (meta?.photoUri && !params.photoUri) setPhotoUri(meta.photoUri);
+          if (meta?.photoUri && !photoUri) setPhotoUri(meta.photoUri);
           if (meta?.box_x1)
             setBoxCoords({
               box_x1: meta.box_x1,
@@ -357,7 +360,9 @@ export default function ConfigureScreen() {
     }
   };
 
-  const handleGenerate = async () => {
+  // direct=true skips the free 3D preview and spends a generation straight
+  // away. Same params either way — preview just forwards them on.
+  const handleGenerate = async (direct = false) => {
     if (!configure.canGenerate()) return;
 
     const activeDraftId = await autoSaveDraft();
@@ -385,7 +390,6 @@ export default function ConfigureScreen() {
           sessionId: lastRender.sessionId,
           renderUrl: lastRender.renderUrls[0],
           renderUrls: JSON.stringify(lastRender.renderUrls),
-          photoUri,
           draftId: activeDraftId ?? "",
           box_x1: boxCoords.box_x1,
           box_y1: boxCoords.box_y1,
@@ -398,11 +402,20 @@ export default function ConfigureScreen() {
       return;
     }
 
-    const goGenerate = () =>
+    // Two ways out of the configurator, same params either way:
+    //   Preview (default) — the free 3D composite, no AI and no credits, so the
+    //     config can be checked on the real house first. Its Back returns here
+    //     with all state intact, and its own Generate button spends the credits.
+    //   Generate (direct)  — skip straight to the AI run for a config you already
+    //     trust; the credit confirmation moves onto this tap instead.
+    // photoUri is deliberately NOT forwarded — it lives on the shared session
+    // (a data: URI would blow up the URL expo-router builds from params).
+    const { photoUri: _photo, ...routeParams } = generateParams;
+    const go = () =>
       router.push({
-        pathname: "/generate",
+        pathname: direct ? "/generate" : "/preview",
         params: {
-          ...generateParams,
+          ...routeParams,
           totalPrice: String(Math.round(total)),
           priceBreakdown: JSON.stringify(breakdown),
           draftId: activeDraftId ?? "",
@@ -411,18 +424,17 @@ export default function ConfigureScreen() {
         },
       });
 
-    // If there's already a render and the visual inputs changed, warn that this
-    // replaces it and uses AI credits (points re-plotted / walls/roof changed).
-    // First-ever generation just proceeds.
-    if (lastRender && lastRender.renderUrls.length > 0) {
+    // Skipping the preview means this tap is the one that spends credits, so it
+    // carries the confirmation the preview screen would otherwise show.
+    if (direct && lastRender && lastRender.renderUrls.length > 0) {
       confirmLeave(
-        "Your changes need a new design render, which uses AI credits and replaces the current one. Regenerate now?",
-        goGenerate,
-        { title: "Regenerate design?", confirmText: "Regenerate" },
+        "This uses AI credits and replaces your current design render. Generate now?",
+        go,
+        { title: "Regenerate design?", confirmText: "Generate" },
       );
       return;
     }
-    goGenerate();
+    go();
   };
 
   // ─── Loading / error ──────────────────────────────────────────────────────
@@ -532,16 +544,28 @@ export default function ConfigureScreen() {
               <Text style={styles.nextButtonText}>Next →</Text>
             </Pressable>
           ) : (
-            <Pressable
-              style={[
-                styles.generateButton,
-                !configure.canGenerate() && styles.buttonDisabled,
-              ]}
-              onPress={handleGenerate}
-              disabled={!configure.canGenerate()}
-            >
-              <Text style={styles.generateButtonText}>Generate →</Text>
-            </Pressable>
+            <>
+              <Pressable
+                style={[
+                  styles.previewButton,
+                  !configure.canGenerate() && styles.buttonDisabled,
+                ]}
+                onPress={() => handleGenerate(false)}
+                disabled={!configure.canGenerate()}
+              >
+                <Text style={styles.previewButtonText}>Preview (free)</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.generateButton,
+                  !configure.canGenerate() && styles.buttonDisabled,
+                ]}
+                onPress={() => handleGenerate(true)}
+                disabled={!configure.canGenerate()}
+              >
+                <Text style={styles.generateButtonText}>Generate →</Text>
+              </Pressable>
+            </>
           )}
         </View>
 
@@ -557,9 +581,9 @@ export default function ConfigureScreen() {
         {configure.canGenerate() && !isLastStep && (
           <Pressable
             style={styles.generateEarlyButton}
-            onPress={handleGenerate}
+            onPress={() => handleGenerate(false)}
           >
-            <Text style={styles.generateEarlyText}>✦ Generate now</Text>
+            <Text style={styles.generateEarlyText}>✦ Preview design now</Text>
           </Pressable>
         )}
       </View>
@@ -659,6 +683,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   nextButtonText: { fontSize: FontSize.label, fontWeight: "600", color: Colors.white },
+  previewButton: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    backgroundColor: Colors.background,
+  },
+  previewButtonText: {
+    fontSize: FontSize.label,
+    fontWeight: "600",
+    color: Colors.primary,
+  },
   generateButton: {
     flex: 2,
     backgroundColor: Colors.primary,

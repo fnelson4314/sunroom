@@ -70,7 +70,6 @@ const PROGRESS_STEPS: { key: GenerateStatus; label: string }[] = [
 
 export default function GenerateScreen() {
   const params = useLocalSearchParams<{
-    photoUri: string;
     box_x1: string;
     box_y1: string;
     box_x2: string;
@@ -103,9 +102,11 @@ export default function GenerateScreen() {
     totalPrice: string;
     priceBreakdown: string;
     renderKey: string;
+    // Set by the preview screen so the photo isn't uploaded twice.
+    uploadedPhotoUrl: string;
   }>();
 
-  const { setLastRender, setDraftId } = useDesignSession();
+  const { setLastRender, setDraftId, photoUri } = useDesignSession();
   const navigation = useNavigation();
 
   // Same flow-position chrome every other screen in the wizard gets. Generate
@@ -202,10 +203,12 @@ export default function GenerateScreen() {
       const wallB = wallData.find((w: any) => w.id === "B");
       const sideWall = wallData.find((w: any) => w.id === "A" || w.id === "C");
 
-      // Step 1 — Upload the house photo
+      // Step 1 — Upload the house photo. The preview screen already uploaded it
+      // (same local file) and passes the URL through, so skip the duplicate.
       setStatus("uploading");
-      const tempSessionId = `temp-${Date.now()}`;
-      const photoUrl = await uploadHousePhoto(params.photoUri, tempSessionId);
+      const photoUrl =
+        params.uploadedPhotoUrl ||
+        (await uploadHousePhoto(photoUri, `temp-${Date.now()}`));
 
       // Step 2 — Persist onto the DB row.
       // configure.tsx already saved a draft row (params.draftId) holding the
@@ -356,7 +359,6 @@ export default function GenerateScreen() {
         sessionId,
         renderUrl,
         renderUrls: JSON.stringify(renderUrls),
-        photoUri: params.photoUri as string,
         draftId: params.draftId as string,
         box_x1: params.box_x1 as string,
         box_y1: params.box_y1 as string,
@@ -386,9 +388,9 @@ export default function GenerateScreen() {
   return (
     <View style={styles.container}>
       {/* House photo as background — blurred feel */}
-      {params.photoUri && (
+      {photoUri && (
         <Image
-          source={{ uri: params.photoUri }}
+          source={{ uri: photoUri }}
           style={styles.backgroundPhoto}
           blurRadius={8}
         />

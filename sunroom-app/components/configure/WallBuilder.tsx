@@ -11,7 +11,10 @@ import type {
   UnitMaterials,
   WallSelection,
 } from "@/hooks/useConfigureState";
-import { inToFtLabel } from "@/hooks/useConfigureState";
+import {
+  gableGlassTypeForWallType,
+  inToFtLabel,
+} from "@/hooks/useConfigureState";
 import React, { useEffect, useState } from "react";
 import {
   Modal,
@@ -110,13 +113,21 @@ const VISUALLY_HANDLED_KEYWORDS = [
   "Gable or Wing Glass",
   "Cambridge Door",
   "Storm Door",
+  // Auto-calculated for under-existing rooms from the wall dimensions
+  // (getUnderbuildCharge in useConfigureState) — never hand-entered.
+  "Underbuild Wall Up Charge",
 ];
 
 const FRAME_COLOR = "#2a2a2a";
 const DOOR_HEIGHT_FT = 7;
 const GLASS_BLUE = "#b8d9f0";
-const OPER_BLUE = "#6aaed4";
-const DOOR_BLUE = "#6aaed4";
+// Every GLAZED unit type (fixed, operable, door, transom, kneewall) draws in the
+// SAME light blue — operable and door used to be a darker #6aaed4, which read as
+// a different material rather than a different unit type (user 2026-08-15).
+// The unit type is communicated by its frame/sash lines, not by tint. SOLID stays
+// its own siding colour: solid vs glass is a MATERIAL difference, not a unit type.
+const OPER_BLUE = GLASS_BLUE;
+const DOOR_BLUE = GLASS_BLUE;
 const SOLID_COLOR = "#e8dfd0";
 
 const SECTION_BG: Record<PanelSection, string> = {
@@ -140,17 +151,13 @@ const DOOR_STYLE_LABELS: Record<DoorStyle, string> = {
   french: "French Door",
 };
 
+// Which gable/wing glass option the base wall type implies. Derived from the
+// SAME test the priced state uses (gableGlassTypeForWallType) so this price note
+// can never disagree with what actually gets charged.
 function getGlassOptionName(n?: string): string {
-  if (!n) return "Gable or Wing Glass Uninsulated Single Pane";
-  const l = n.toLowerCase();
-  if (
-    l.includes("6") ||
-    l.includes("all-season") ||
-    l.includes("g1") ||
-    l.includes("insulated")
-  )
-    return "Gable or Wing Glass Comfort G1";
-  return "Gable or Wing Glass Uninsulated Single Pane";
+  return gableGlassTypeForWallType(n) === "g1"
+    ? "Gable or Wing Glass Comfort G1"
+    : "Gable or Wing Glass Uninsulated Single Pane";
 }
 
 const SECTION_FLEX: Record<PanelSection, number> = {

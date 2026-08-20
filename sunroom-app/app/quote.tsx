@@ -88,17 +88,16 @@ async function toBase64DataUri(uri: string): Promise<string> {
 }
 
 export default function QuoteScreen() {
-  const { sessionId, renderUrl, photoUri, totalPrice, priceBreakdown } =
+  const { sessionId, renderUrl, totalPrice, priceBreakdown } =
     useLocalSearchParams<{
       sessionId: string;
       renderUrl: string;
-      photoUri: string;
       totalPrice: string;
       priceBreakdown: string;
     }>();
 
   const navigation = useNavigation();
-  const { reachStep } = useDesignSession();
+  const { reachStep, photoUri } = useDesignSession();
 
   useLayoutEffect(() => {
     navigation.setOptions({ headerTitle: () => <FlowNav current={4} /> });

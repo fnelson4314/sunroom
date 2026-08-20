@@ -350,6 +350,42 @@ def prepare_render_mask(
     return buf.getvalue(), coverage
 
 
+def prepare_regional_masks(
+    glass_mask_bytes: bytes, structure_mask_bytes: bytes
+) -> tuple[bytes, bytes]:
+    """Masks for the TWO-STEP regional assembly: (glass_expanded, frames).
+
+    Step 1 pastes AI glass through glass_expanded — DILATED past the pane edge so
+    the composite's teal glass ring can never peek out around the AI glass (the
+    eroded-mask v1 did the opposite and every pane got a teal halo, user report
+    2026-08-15). Step 2 pastes the composite's exact FRAMES (structure minus raw
+    glass) back on top, overwriting the AI bleed — so glass reaches the exact
+    pane edge AND the frames are pixel-exact.
+    """
+    import numpy as np
+
+    g_img = Image.open(io.BytesIO(glass_mask_bytes)).convert("L")
+    s_img = Image.open(io.BytesIO(structure_mask_bytes)).convert("L")
+    if s_img.size != g_img.size:
+        s_img = s_img.resize(g_img.size, Image.LANCZOS)
+    g = g_img.point(lambda p: 255 if p > 40 else 0)
+    s = s_img.point(lambda p: 255 if p > 40 else 0)
+
+    glass_expanded = g.filter(ImageFilter.MaxFilter(7)).filter(
+        ImageFilter.GaussianBlur(2)
+    )
+    frames = Image.fromarray(
+        (((np.asarray(s) > 128) & ~(np.asarray(g) > 128)).astype(np.uint8)) * 255
+    ).filter(ImageFilter.GaussianBlur(1))
+
+    def _png(im):
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        return buf.getvalue()
+
+    return _png(glass_expanded), _png(frames)
+
+
 def run_flux_fill_lora(
     image_url: str,
     mask_url: str,
@@ -422,18 +458,36 @@ def composite_masked(ai_image_url: str, base_bytes: bytes, mask_bytes: bytes) ->
     with httpx.Client(timeout=60) as client:
         resp = client.get(ai_image_url)
         resp.raise_for_status()
+    return composite_bytes_masked(resp.content, base_bytes, mask_bytes)
 
-    ai = Image.open(io.BytesIO(resp.content)).convert("RGB")
+
+def union_masks(a_bytes: bytes, b_bytes: bytes) -> bytes:
+    """Pixel-wise max of two L-mode masks (resized to a's size). Used to extend
+    the background re-lock to structure ∪ contact-shadow so the rendered ground
+    shadow survives the photo restore."""
+    from PIL import ImageChops
+
+    a = Image.open(io.BytesIO(a_bytes)).convert("L")
+    b = Image.open(io.BytesIO(b_bytes)).convert("L")
+    if b.size != a.size:
+        b = b.resize(a.size, Image.LANCZOS)
+    buf = io.BytesIO()
+    ImageChops.lighter(a, b).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def composite_bytes_masked(top_bytes: bytes, base_bytes: bytes, mask_bytes: bytes) -> bytes:
+    """Image.composite with all three inputs as bytes: mask=255 → top, 0 → base."""
+    top = Image.open(io.BytesIO(top_bytes)).convert("RGB")
     base = Image.open(io.BytesIO(base_bytes)).convert("RGB")
     mask = Image.open(io.BytesIO(mask_bytes)).convert("L")
 
-    if ai.size != base.size:
-        ai = ai.resize(base.size, Image.LANCZOS)
+    if top.size != base.size:
+        top = top.resize(base.size, Image.LANCZOS)
     if mask.size != base.size:
         mask = mask.resize(base.size, Image.LANCZOS)
 
-    # composite(image1, image2, mask): mask=255 → image1 (AI), 0 → image2 (base).
-    out = Image.composite(ai, base, mask)
+    out = Image.composite(top, base, mask)
 
     buf = io.BytesIO()
     out.save(buf, format="JPEG", quality=95)
@@ -495,6 +549,122 @@ def run_flux_control_dev(
     else:
         logger.info(f"{model} (no LoRA) guidance={guidance} steps={steps}")
 
+    return run_model_prediction(model, input_data)
+
+
+# Finish prompt for the nano-banana finisher (FINISH_MODEL=google/nano-banana-2).
+# Hardened keep-everything wording: in the bake-off this model produced the most
+# photographic finish BUT rewrote structure when unconstrained (deleted a
+# kneewall, drift 0.102) — the config gate catches any such rewrite and falls
+# back to the guaranteed assembly, so the prompt's job is to maximize the
+# hold rate, not to be the safety mechanism.
+NANO_FINISH_PROMPT = (
+    "Make this look like a crisp professional real-estate photograph. Improve "
+    "material realism, lighting and texture only. Keep every structural element "
+    "exactly as it is: every frame, mullion, pane of glass, kneewall panel, "
+    "siding course, door and handle stays exactly where and how it is drawn - "
+    "do not add, remove, move, resize or merge anything, and do not change the "
+    "house, yard or background."
+)
+
+
+def run_nano_banana(model_slug: str, image_url: str, prompt: str) -> str:
+    """Google nano-banana family edit (glass pass or finish pass). Schema per the
+    bake-off harness: image_input is a LIST, no seed input (stochastic per call).
+    Official models → named endpoint."""
+    input_data = {
+        "prompt": prompt,
+        "image_input": [image_url],
+        "output_format": "jpg",
+    }
+    logger.info(f"{model_slug} edit")
+    return run_model_prediction(model_slug, input_data)
+
+
+def run_topaz_upscale(image_url: str) -> str:
+    """Topaz CGI 2x upscale — the final fidelity step (bake-off: drift 0.014,
+    crispest output, adds no hallucination). Returns the Replicate delivery URL;
+    caller MUST download + re-upload (delivery URLs expire)."""
+    return run_model_prediction(
+        "topazlabs/image-upscale",
+        {
+            "image": image_url,
+            "enhance_model": os.getenv("TOPAZ_MODEL", "CGI"),
+            "upscale_factor": "2x",
+        },
+    )
+
+
+# Realism-only prompt for the light polish. Deliberately says NOTHING about the
+# configuration (panel count, doors, materials) — at low prompt_strength the
+# model barely renoises, so config is preserved from the composite pixels; the
+# prompt only nudges toward a photographic look, not a redesign.
+POLISH_PROMPT = (
+    "a professional real-estate photograph of a glass sunroom addition on a house, "
+    "photorealistic, natural outdoor daylight, crisp clear reflective glass reflecting "
+    "the sky and yard, real anodized aluminum framing, subtle realistic shadows, "
+    "sharp focus, high detail, no text"
+)
+
+
+# flux-dev takes a fixed aspect_ratio enum (NOT "match_input_image" — kontext-only).
+_FLUX_ASPECTS = {
+    "1:1": 1.0, "16:9": 16 / 9, "21:9": 21 / 9, "3:2": 3 / 2, "2:3": 2 / 3,
+    "4:5": 4 / 5, "5:4": 5 / 4, "3:4": 3 / 4, "4:3": 4 / 3, "9:16": 9 / 16, "9:21": 9 / 21,
+}
+
+
+def _nearest_flux_aspect(image_url: str) -> str:
+    """Map the composite's real aspect to the closest allowed flux enum, so the
+    polished output keeps the photo's proportions (composite_masked resizes the
+    result back to the base photo, which would squish a mismatched aspect)."""
+    try:
+        with httpx.Client(timeout=30) as client:
+            resp = client.get(image_url)
+            resp.raise_for_status()
+        w, h = Image.open(io.BytesIO(resp.content)).size
+        return min(_FLUX_ASPECTS, key=lambda k: abs(_FLUX_ASPECTS[k] - w / h))
+    except Exception as e:
+        logger.warning(f"polish aspect detect failed ({e}) — defaulting 4:3")
+        return "4:3"
+
+
+def run_flux_polish(
+    image_url: str, seed: int | None = None, strength: float | None = None
+) -> str:
+    """Light img2img realism polish for the HYBRID path (FLUX_REPAINT_MODE=photoreal
+    with FLUX_POLISH=true).
+
+    Runs flux-dev in img2img over the already-geometrically-EXACT 3D composite at
+    a LOW prompt_strength: the model barely renoises, so the configured panels,
+    doors, and dimensions survive in the pixels while it adds the photographic
+    realism the CGI can't cheaply fake — real reflective glass, material texture,
+    softened CGI edges, film grain. The composite stays the source of truth; this
+    is a polish, not a repaint.
+
+    prompt_strength is the denoise knob (0 = untouched, 1 = fully reimagined).
+    ~0.2-0.3 is the realism-without-redesign band — push it UP for more realism,
+    DOWN if any pane/config drifts. All knobs are env-tunable so we can sweep
+    without a code change. flux-dev is an official BFL model → named endpoint.
+    """
+    model = os.getenv("FLUX_POLISH_MODEL", "black-forest-labs/flux-dev")
+    if strength is None:
+        strength = float(os.getenv("FLUX_POLISH_STRENGTH", "0.25"))
+
+    input_data = {
+        "prompt":              POLISH_PROMPT,
+        "image":               image_url,
+        "prompt_strength":     strength,
+        "aspect_ratio":        _nearest_flux_aspect(image_url),
+        "num_inference_steps": int(os.getenv("FLUX_POLISH_STEPS", "30")),
+        "guidance":            float(os.getenv("FLUX_POLISH_GUIDANCE", "3")),
+        "output_format":       "jpg",
+        "output_quality":      95,
+    }
+    if seed is not None:
+        input_data["seed"] = seed
+
+    logger.info(f"{model} polish img2img, prompt_strength={strength}, seed={seed}")
     return run_model_prediction(model, input_data)
 
 

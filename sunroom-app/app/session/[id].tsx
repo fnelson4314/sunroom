@@ -1,6 +1,7 @@
 import Card from "@/components/ui/Card";
 import StatusBadge from "@/components/ui/StatusBadge";
 import { Colors } from "@/constants/Colors";
+import { useDesignSession } from "@/contexts/DesignSession";
 import { FontSize } from "@/constants/Typography";
 import { getSession } from "@/services/api";
 import { router, useLocalSearchParams } from "expo-router";
@@ -17,6 +18,7 @@ import {
 
 export default function SessionDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { setPhotoUri } = useDesignSession();
 
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -235,19 +237,21 @@ export default function SessionDetailScreen() {
         {session.draft_state && (
           <Pressable
             style={styles.retryButton}
-            onPress={() =>
+            onPress={() => {
+              // The persistent Supabase URL, so the photo survives even if the
+              // original local file is gone. Set on the session, not a param.
+              setPhotoUri(session.house_photo_url ?? "");
               router.push({
                 pathname: "/configure",
                 params: {
                   draftId: session.id,
-                  photoUri: session.house_photo_url ?? "",
                   box_x1: "0",
                   box_y1: "0",
                   box_x2: "1",
                   box_y2: "1",
                 },
-              })
-            }
+              });
+            }}
           >
             <Text style={styles.retryButtonText}>✎ Edit Configuration</Text>
           </Pressable>

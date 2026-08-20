@@ -5,3 +5,5 @@ __pycache__/
 .DS_Store
 
 sunroom-3d/node_modules
+.gitignore
+.env.*

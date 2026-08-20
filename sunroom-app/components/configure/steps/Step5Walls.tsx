@@ -100,7 +100,7 @@ export default function Step5Walls({
           selectedWallType={configure.state.wallType}
           activeWallId={activeWallId}
           onActiveWallChange={onActiveWallChange}
-          onWallTypeSelect={configure.setWallType}
+          onWallTypeSelect={(o) => configure.setWallType(o, allOptions)}
           onWallDimensionChange={configure.setScreenWallDimension}
           onUnitWidthChange={configure.setScreenUnitWidth}
           onUnitTypeChange={configure.setScreenUnitType}
@@ -110,7 +110,9 @@ export default function Step5Walls({
           onHandrailChange={configure.setScreenHandrail}
           onTransomChange={configure.setScreenTransom}
           onTransomHeightChange={configure.setScreenTransomHeight}
-          onGableGlassChange={configure.setScreenGableGlass}
+          onGableGlassChange={(wallId, config) =>
+            configure.setScreenGableGlass(wallId, config, allOptions)
+          }
           wallColor={configure.state.wallColor}
           onWallColorChange={configure.setWallColor}
           handrailOption={handrailOption}
@@ -129,7 +131,7 @@ export default function Step5Walls({
           defaultKneewallHeightIn={configure.state.defaultKneewallHeightIn}
           activeWallId={activeWallId}
           onActiveWallChange={onActiveWallChange}
-          onWallTypeSelect={configure.setWallType}
+          onWallTypeSelect={(o) => configure.setWallType(o, allOptions)}
           onDimensionChange={configure.setWallDimension}
           onDefaultTransomHeightChange={configure.setDefaultTransomHeight}
           onDefaultKneewallHeightChange={configure.setDefaultKneewallHeight}

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
-from app.tasks import generate_sunroom
+from app.tasks import generate_sunroom, render_composite_preview
 from app.database import supabase
 from app.config import validate_uuid
 from app.worker import celery_app
@@ -108,6 +108,47 @@ async def start_generation(
     except Exception as e:
         logger.error(f"Failed to enqueue task: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to queue generation job")
+
+
+@router.post("/preview")
+def preview_composite(
+    body: GenerateRequest,
+    key: str = Depends(require_api_key),
+    _rl: None = Depends(rate_limit(GENERATE_MAX_PER_WINDOW * 3, GENERATE_WINDOW_SECONDS)),
+):
+    """3D composite only — no AI, no credits, no session row touched.
+
+    Lets the salesperson confirm the configured structure sits correctly on the
+    house BEFORE spending a generation. Synchronous (a few seconds) so the client
+    just awaits the URL — no Celery, no polling. Rate limit is looser than
+    /generate because this costs nothing but renderer time.
+    """
+    try:
+        result = render_composite_preview(
+            house_photo_url=body.house_photo_url,
+            box_x1=body.box_x1 or 0.0,
+            box_y1=body.box_y1 or 0.0,
+            box_x2=body.box_x2 or 1.0,
+            box_y2=body.box_y2 or 1.0,
+            wall_corners=body.wall_corners or "",
+            wall_data=body.wall_data or "",
+            wall_system=body.wall_system or "4_inch",
+            roof_style=body.roof_style or "studio",
+            wall_color=body.wall_color or "white",
+            mount_height=body.mount_height or "",
+            projection_distance=body.projection_distance or "",
+            include_gable_wings=(
+                body.include_gable_wings if body.include_gable_wings is not None else True
+            ),
+            wall_combo=body.wall_combo,
+            screen_options=body.screen_options or "",
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Preview render failed: {e}")
+        raise HTTPException(status_code=502, detail=f"3D preview failed: {e}")
 
 
 @router.get("/status/{session_id}")

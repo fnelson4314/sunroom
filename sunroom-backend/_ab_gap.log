@@ -1,0 +1,32 @@
+=== as_gable (6_inch / gable / white) ===
+instruction: Turn the 3D-rendered sunroom overlay in this photo into a photorealistic white aluminum-framed sunroom, as if actually built and professionally photographed. Keep its exact geometry: every frame, mullion, panel, kneewall, transom, and door stays exactly where and how it is drawn — do not add, remove, move, or resize anything. panels drawn as glass become dark tinted reflective glass like real sunroom glazing photographed in daylight: every pane carries a soft reflection of the sky and yard, and the unlit shaded interior is only faintly hinted behind the reflections; panels drawn as solid or white stay solid; windows drawn with an offset sliding half-pane KEEP that visible two-pane sliding sash split — do not merge them into one sheet of glass; any glass door keeps full-height glass running all the way down to the floor exactly as drawn — no kneewall and no solid panel on the door, even when the panels beside it have one — with a slim white vertical pull handle exactly where drawn; the drawn roof becomes dark asphalt shingles with fine horizontal courses matching the existing house roof. Keep the house, yard, and everything outside the structure completely unchanged.
+
+kontext-dev run0 (black-forest-labs/flux-kontext-dev) ...
+  -> kontext-dev_r0.jpg (8s)
+
+gallery -> C:\Users\fnels\sunroom\sunroom-backend\_ab_models_out\gallery.html
+SAVED gap_as_gable.jpg
+=== ts_gable (4_inch / gable / white) ===
+instruction: Turn the 3D-rendered sunroom overlay in this photo into a photorealistic white aluminum-framed sunroom, as if actually built and professionally photographed. Keep its exact geometry: every frame, mullion, panel, kneewall, transom, and door stays exactly where and how it is drawn — do not add, remove, move, or resize anything. panels drawn as glass become dark tinted reflective glass like real sunroom glazing photographed in daylight: every pane carries a soft reflection of the sky and yard, and the unlit shaded interior is only faintly hinted behind the reflections; panels drawn as solid or white stay solid; windows drawn with an offset sliding half-pane KEEP that visible two-pane sliding sash split — do not merge them into one sheet of glass; any glass door keeps full-height glass running all the way down to the floor exactly as drawn — no kneewall and no solid panel on the door, even when the panels beside it have one — with a slim white vertical pull handle exactly where drawn; the drawn roof becomes dark asphalt shingles with fine horizontal courses matching the existing house roof. Keep the house, yard, and everything outside the structure completely unchanged.
+
+kontext-dev run0 (black-forest-labs/flux-kontext-dev) ...
+  -> kontext-dev_r0.jpg (7s)
+
+gallery -> C:\Users\fnels\sunroom\sunroom-backend\_ab_models_out\gallery.html
+SAVED gap_ts_gable.jpg
+=== as_ue (6_inch / under_existing / tan) ===
+instruction: Turn the 3D-rendered sunroom overlay in this photo into a photorealistic light cream aluminum-framed sunroom, as if actually built and professionally photographed. Keep its exact geometry: every frame, mullion, panel, kneewall, transom, and door stays exactly where and how it is drawn — do not add, remove, move, or resize anything. panels drawn as glass become dark tinted reflective glass like real sunroom glazing photographed in daylight: every pane carries a soft reflection of the sky and yard, and the unlit shaded interior is only faintly hinted behind the reflections; panels drawn as solid or white stay solid; windows drawn with an offset sliding half-pane KEEP that visible two-pane sliding sash split — do not merge them into one sheet of glass; any glass door keeps full-height glass running all the way down to the floor exactly as drawn — no kneewall and no solid panel on the door, even when the panels beside it have one — with a slim white vertical pull handle exactly where drawn; the existing house roof above it stays completely unchanged. Keep the house, yard, and everything outside the structure completely unchanged.
+
+kontext-dev run0 (black-forest-labs/flux-kontext-dev) ...
+  -> kontext-dev_r0.jpg (35s)
+
+gallery -> C:\Users\fnels\sunroom\sunroom-backend\_ab_models_out\gallery.html
+SAVED gap_as_ue.jpg
+=== screen (2_inch / studio / tan) ===
+instruction: Turn the 3D-rendered screened porch overlay in this photo into a photorealistic light cream aluminum-framed screened porch, as if actually built and professionally photographed. Keep its exact geometry: every frame, mullion, panel, kneewall, transom, and door stays exactly where and how it is drawn — do not add, remove, move, or resize anything. panels drawn as dark mesh become charcoal insect screen mesh you can partly see through, with no glass anywhere; the drawn roof becomes dark asphalt shingles with fine horizontal courses matching the existing house roof. Keep the house, yard, and everything outside the structure completely unchanged.
+
+kontext-dev run0 (black-forest-labs/flux-kontext-dev) ...
+  -> kontext-dev_r0.jpg (8s)
+
+gallery -> C:\Users\fnels\sunroom\sunroom-backend\_ab_models_out\gallery.html
+SAVED gap_screen.jpg
