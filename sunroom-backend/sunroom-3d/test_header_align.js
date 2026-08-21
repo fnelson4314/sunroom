@@ -57,6 +57,35 @@ for (const fw of [2 / 12]) {
 }
 console.log("header align: reduces to the legacy +fw when fw === structFw");
 
+// ── The INVENTED transom must match what buildPanel draws ────────────────────
+// When no transom height is typed, buildPanel invents one as `h * 0.18` where
+// h = unitH - thinFw*2 (the panel is inset by the THIN cosmetic frame). If
+// wallTransomFt predicts that with the STRUCTURAL width instead, the borrowed
+// flat is short by the difference and the header misses the sill around the
+// corner — 1.44in on a 6in system (user 2026-08-20, second time this exact
+// thin-vs-structural split has broken header alignment).
+const investedTransom = (wallH, structFw) => (wallH - thinFw(structFw) * 2) * 0.18;
+for (const [name, structFw] of Object.entries(WALL_SYSTEMS)) {
+  const wallH = 8;
+  const tH = investedTransom(wallH, structFw);
+  const flat = flatBorrowed(tH, structFw);
+  const gap =
+    topRailCentre(wallH, flat, structFw) - sillRailCentre(wallH, tH, structFw);
+  assert.ok(
+    Math.abs(gap) < 1e-9,
+    `${name}: invented-transom header off by ${(gap * 12).toFixed(2)}in`,
+  );
+  // and the prediction must equal the DRAWN value, not the structural-width one
+  const structural = (wallH - structFw * 2) * 0.18;
+  if (structFw > 2 / 12)
+    assert.notStrictEqual(
+      Math.round(tH * 1000),
+      Math.round(structural * 1000),
+      `${name}: test would pass even with the old structural-width bug`,
+    );
+}
+console.log("header align: invented transom matches buildPanel (thin frame), all systems");
+
 // ── The branch table (triangle vs pentagon) ──────────────────────────────────
 // Shape is chosen by the user's transom selection; these are the cases the
 // flip-flop bugs kept trading against each other. Mirrors the header-align

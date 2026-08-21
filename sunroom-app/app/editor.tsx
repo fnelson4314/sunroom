@@ -2,10 +2,12 @@ import FlowNav from "@/components/FlowNav";
 import { Colors } from "@/constants/Colors";
 import { FontSize } from "@/constants/Typography";
 import { useDesignSession } from "@/contexts/DesignSession";
+import { getRefineStatus, refineRender } from "@/services/api";
 import { confirmLeave } from "@/utils/confirm";
 import { router, useLocalSearchParams, useNavigation } from "expo-router";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Image,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -14,6 +16,7 @@ import {
   Share,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 
@@ -52,7 +55,7 @@ export default function EditorScreen() {
 
   // The set of renders to choose from. Prefer the variations array; fall back to
   // the single render_url so older flows keep working.
-  const urls = useMemo<string[]>(() => {
+  const initialUrls = useMemo<string[]>(() => {
     let list: string[] = [];
     try {
       const parsed = JSON.parse(renderUrls || "[]");
@@ -63,6 +66,10 @@ export default function EditorScreen() {
     if (list.length === 0 && renderUrl) list = [renderUrl];
     return list;
   }, [renderUrls, renderUrl]);
+
+  // Held in state, not derived: a change request APPENDS a new version, and the
+  // gallery has to show it without leaving the screen.
+  const [urls, setUrls] = useState<string[]>(initialUrls);
 
   // Mark Design reached and keep the shared session pointed at this render so the
   // back-nav menu can return here / go to Quote. Don't clobber a real render key
@@ -83,6 +90,79 @@ export default function EditorScreen() {
   const scrollRef = useRef<ScrollView>(null);
 
   const selectedUrl = urls[selectedIndex] ?? renderUrl ?? null;
+
+  // ─── Follow-up change request ─────────────────────────────────────────────
+  // The salesperson describes a small change in their own words and the current
+  // render is edited in place ("make the kneewall match the house"). Feeding the
+  // RENDER back in — rather than re-generating from the composite — keeps
+  // everything already correct and moves only what was asked.
+  const [changeText, setChangeText] = useState("");
+  const [refining, setRefining] = useState(false);
+  // Shown INLINE, not via Alert.alert — react-native-web ignores it (see
+  // utils/confirm.ts), so a failed request looked like nothing happening at all.
+  const [changeError, setChangeError] = useState<string | null>(null);
+
+  // Poll handle so leaving the screen mid-change doesn't leave a timer running.
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+  }, []);
+
+  const requestChange = async () => {
+    const text = changeText.trim();
+    if (!text || refining || !sessionId || !selectedUrl) return;
+    setRefining(true);
+    setChangeError(null);
+    try {
+      // Queue it, then poll — the edit is a full image-model call (~2 min) and a
+      // held-open request that long is lost to a phone locking or a tab sleeping.
+      await refineRender({
+        session_id: sessionId,
+        request: text,
+        // Chain from whichever version is on screen, so changes stack.
+        source_render_url: selectedUrl,
+      });
+      setChangeText("");
+
+      const before = urls.length;
+      const started = Date.now();
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(async () => {
+        try {
+          const st = await getRefineStatus(sessionId);
+          const done =
+            st.refine_status === "complete" ||
+            (st.render_urls?.length ?? 0) > before;
+          if (done) {
+            if (pollRef.current) clearInterval(pollRef.current);
+            const next = st.render_urls?.length ? st.render_urls : urls;
+            setUrls(next);
+            setSelectedIndex(next.length - 1);
+            setLastRender({ key: "", sessionId, renderUrls: next });
+            setRefining(false);
+          } else if (st.refine_status === "failed") {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setChangeError(st.error || "Could not apply that change");
+            setRefining(false);
+          } else if (Date.now() - started > 6 * 60 * 1000) {
+            // Safety valve — never spin forever.
+            if (pollRef.current) clearInterval(pollRef.current);
+            setChangeError(
+              "This is taking unusually long. Reopen the design shortly to see if it applied.",
+            );
+            setRefining(false);
+          }
+        } catch {
+          // A dropped poll is not a failure — the job keeps running.
+        }
+      }, 4000);
+    } catch (e: any) {
+      setChangeError(
+        e?.response?.data?.detail ?? e?.message ?? "Could not start that change",
+      );
+      setRefining(false);
+    }
+  };
 
   const markFailed = (i: number) =>
     setFailed((prev) => (prev[i] ? prev : { ...prev, [i]: true }));
@@ -277,6 +357,49 @@ export default function EditorScreen() {
             : "Review the design below. You can tweak the configuration, generate a quote, or share with the customer."}
         </Text>
 
+        {/* Follow-up change request — edits the render on screen in place. */}
+        <View style={styles.changeBox}>
+          <Text style={styles.changeLabel}>Request a change</Text>
+          <Text style={styles.changeHint}>
+            Describe one small change in plain words — it edits the design you're
+            viewing and keeps it as a new version.
+          </Text>
+          <View style={styles.changeRow}>
+            <TextInput
+              style={styles.changeInput}
+              value={changeText}
+              onChangeText={setChangeText}
+              placeholder="e.g. make the kneewall siding match the house"
+              placeholderTextColor={Colors.text.tertiary}
+              editable={!refining}
+              maxLength={300}
+              multiline
+            />
+            <Pressable
+              style={[
+                styles.changeButton,
+                (!changeText.trim() || refining) && styles.buttonDisabled,
+              ]}
+              onPress={requestChange}
+              disabled={!changeText.trim() || refining}
+            >
+              {refining ? (
+                <ActivityIndicator color={Colors.white} />
+              ) : (
+                <Text style={styles.changeButtonText}>Apply</Text>
+              )}
+            </Pressable>
+          </View>
+          {refining && (
+            <Text style={styles.changeHint}>
+              Applying your change — this can take a minute or two.
+            </Text>
+          )}
+          {!!changeError && (
+            <Text style={styles.changeError}>{changeError}</Text>
+          )}
+        </View>
+
         <View style={styles.primaryActions}>
           <Pressable style={styles.primaryButton} onPress={handleGoToQuote}>
             <Text style={styles.primaryButtonText}>Generate Quote →</Text>
@@ -434,6 +557,52 @@ const styles = StyleSheet.create({
     color: Colors.text.secondary,
     lineHeight: 20,
     marginTop: -6,
+  },
+  changeBox: {
+    marginTop: 4,
+    marginBottom: 16,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.background,
+    gap: 8,
+  },
+  changeLabel: {
+    fontSize: FontSize.label,
+    fontWeight: "600",
+    color: Colors.text.primary,
+  },
+  changeHint: { fontSize: FontSize.small, color: Colors.text.secondary },
+  changeRow: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
+  changeInput: {
+    flex: 1,
+    minHeight: 46,
+    maxHeight: 90,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    color: Colors.text.primary,
+    fontSize: FontSize.body,
+  },
+  changeButton: {
+    minWidth: 88,
+    paddingHorizontal: 18,
+    paddingVertical: 13,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Colors.primary,
+  },
+  buttonDisabled: { opacity: 0.4 },
+  changeError: { fontSize: FontSize.small, color: Colors.status.failed },
+  changeButtonText: {
+    fontSize: FontSize.label,
+    fontWeight: "600",
+    color: Colors.white,
   },
   primaryActions: { marginTop: 4 },
   primaryButton: {

@@ -113,8 +113,11 @@ export type ScreenWallSelection = {
 export type ScreenRoomConfig = {
   walls: ScreenWallSelection[];
   kneewall: { enabled: boolean; heightIn: string; solidStyle: SolidMaterial };
-  chairrail: { enabled: boolean; heightIn: string };
-  handrail: { enabled: boolean };
+  // `walls` lists the wall ids the rail is actually on. Enabling the feature no
+  // longer implies every wall — a rail is chosen per WALL (never per unit).
+  // Defaults to all designed walls on enable so existing drafts price the same.
+  chairrail: { enabled: boolean; heightIn: string; walls: string[] };
+  handrail: { enabled: boolean; walls: string[] };
   // ONE transom for the whole screen room (was per wall). On walls with no
   // gable/wing it's the usual band inside the unit cells; on the gable/wing wall
   // that height is eaten out of the TOP of the wall and becomes the flat base of
@@ -252,7 +255,14 @@ function makeScreenWall(id: "A" | "B" | "C"): ScreenWallSelection {
   };
 }
 
-/** Auto-divide wall width into max equal units where each unit ≤ 48". All units same width. */
+// Door leaves are a fixed 36in; every other unit divides what's left, up to 48in
+// each. Applies to screen-room doors and to storm/entry doors on glass rooms —
+// a sliding patio door keeps its configured width (it is a two-leaf assembly, not
+// a single 36in leaf). User rule, 2026-08-20.
+export const DOOR_UNIT_IN = 36;
+export const MAX_UNIT_IN = 48;
+
+/** Auto-divide wall width: doors are a fixed 36", other units share the rest (≤48" each). */
 export function recalcScreenUnits(
   widthIn: string,
   existingTypes?: ScreenUnitType[],
@@ -263,15 +273,54 @@ export function recalcScreenUnits(
 } {
   const w = parseFloat(widthIn) || 0;
   if (w <= 0) return { unitWidths: [], unitTypes: [], unitLocked: [] };
-  const count = Math.max(1, Math.ceil(w / 48));
-  const evenWidth = String(Math.round((w / count) * 10) / 10);
-  const unitWidths = Array.from({ length: count }, () => evenWidth);
+  const count = Math.max(1, Math.ceil(w / MAX_UNIT_IN));
   const unitTypes: ScreenUnitType[] = Array.from(
     { length: count },
     (_, i) => existingTypes?.[i] ?? "screen",
   );
+  // Doors are a FIXED 36in leaf; only the non-door units share what's left of
+  // the wall. Dividing everything evenly gave doors the same 48in as a screen
+  // panel, which is not a product we make (user 2026-08-20).
+  const unitWidths = distributeUnitWidths(
+    w,
+    unitTypes.map((t) => t === "door"),
+  );
   const unitLocked: boolean[] = Array.from({ length: count }, () => false);
   return { unitWidths, unitTypes, unitLocked };
+}
+
+/**
+ * Split a wall into unit widths where every DOOR takes a fixed DOOR_UNIT_IN and
+ * the remaining width is shared evenly by the rest. Shared by the screen-room
+ * auto-divide and the glass-room door handling so the two can't drift.
+ * Falls back to an even split when doors would consume the whole wall.
+ */
+export function distributeUnitWidths(
+  totalIn: number,
+  isDoor: boolean[],
+): string[] {
+  const n = isDoor.length;
+  if (n === 0 || totalIn <= 0) return [];
+  const doors = isDoor.filter(Boolean).length;
+  const others = n - doors;
+  const remaining = totalIn - doors * DOOR_UNIT_IN;
+  // Not enough wall left for the non-door units — fall back to an even split so
+  // a narrow wall still produces something usable rather than negative widths.
+  if (others > 0 && remaining <= 0) {
+    const even = String(Math.round((totalIn / n) * 10) / 10);
+    return Array.from({ length: n }, () => even);
+  }
+  // Every unit is a door (e.g. a narrow wall that IS the doorway): they share the
+  // wall evenly rather than each taking 36in and leaving the rest of the wall
+  // unaccounted for, which would open a gap in the drawn layout.
+  if (others === 0) {
+    const even = String(Math.round((totalIn / n) * 10) / 10);
+    return Array.from({ length: n }, () => even);
+  }
+  const each = remaining / others;
+  return isDoor.map((d) =>
+    d ? String(DOOR_UNIT_IN) : String(Math.round(each * 10) / 10),
+  );
 }
 
 /**
@@ -375,8 +424,8 @@ const initialState: ConfigureState = {
   screenRoom: {
     walls: [],
     kneewall: { enabled: false, heightIn: "", solidStyle: "panel" },
-    chairrail: { enabled: false, heightIn: "" },
-    handrail: { enabled: false },
+    chairrail: { enabled: false, heightIn: "", walls: [] },
+    handrail: { enabled: false, walls: [] },
     transom: { enabled: false, heightIn: "" },
   },
 };
@@ -397,6 +446,46 @@ const initialState: ConfigureState = {
 // other builder, which spreads whichever footprint is wrong instead of fixing
 // it. A dimension that disagrees with the plotted points has to be retyped —
 // nothing here can know which of the two sets matches the photo.
+
+/**
+ * A glass-room unit that takes the FIXED 36in door leaf. Storm and entry doors
+ * are a single hinged leaf, so they get DOOR_UNIT_IN; a SLIDING or french patio
+ * door is a multi-leaf assembly whose width is the opening the user configured,
+ * so it keeps its share. User rule, 2026-08-20.
+ */
+export function isFixedWidthDoor(panelType: string, doorStyle?: string): boolean {
+  return (
+    String(panelType).includes("door") &&
+    (doorStyle === "entry" || doorStyle === "storm")
+  );
+}
+
+/**
+ * Handrail quantity (lin ft) for a screen room: only the walls the rail is
+ * actually ON, and each DOOR on those walls removes a 36in door leaf's worth —
+ * you cannot run a handrail across a doorway (user rule, 2026-08-20). Ceiled
+ * per wall, matching how every other lin-ft quantity here is priced.
+ */
+export function handrailLinFt(screenRoom: ScreenRoomConfig): number {
+  const on = new Set(screenRoom.handrail.walls);
+  return screenRoom.walls
+    .filter((w) => on.has(w.id))
+    .reduce((sum, w) => {
+      const doors = w.unitTypes.filter((t) => t === "door").length;
+      const netIn = Math.max(0, (parseFloat(w.widthIn) || 0) - doors * DOOR_UNIT_IN);
+      return sum + inToCeilFt(String(netIn));
+    }, 0);
+}
+
+/** Re-lay a glass wall's unit widths with fixed-width doors honoured. */
+function relayoutGlassWidths(w: WallSelection): string[] {
+  const totalIn = parseFloat(w.widthIn) || 0;
+  const flags = w.panelTypes.map((pt, i) =>
+    isFixedWidthDoor(pt, w.unitDoorStyles[i]),
+  );
+  if (!flags.some(Boolean)) return w.unitWidths;
+  return distributeUnitWidths(totalIn, flags);
+}
 
 function applyGlassDim(
   w: WallSelection,
@@ -424,7 +513,8 @@ function applyGlassDim(
   const newWidths = Array.from({ length: w.units }, (_, i) =>
     locked[i] ? w.unitWidths[i] : evenWidth,
   );
-  return { ...w, widthIn: value, unitWidths: newWidths };
+  const sized = { ...w, widthIn: value, unitWidths: newWidths };
+  return { ...sized, unitWidths: relayoutGlassWidths(sized) };
 }
 
 function applyScreenDim(
@@ -701,7 +791,20 @@ export function useConfigureState() {
           if (w.id !== wallId) return w;
           const newTypes = [...w.unitTypes];
           newTypes[unitIndex] = type;
-          return { ...w, unitTypes: newTypes };
+          // Turning a unit into (or out of) a door changes its FIXED 36in width,
+          // so the other units have to re-share what's left. Hand-locked widths
+          // are respected — only unlocked units absorb the difference.
+          const totalIn = parseFloat(w.widthIn) || 0;
+          const anyLocked = (w.unitLocked || []).some(Boolean);
+          const newWidths = anyLocked
+            ? w.unitWidths.map((uw, i) =>
+                newTypes[i] === "door" ? String(DOOR_UNIT_IN) : uw,
+              )
+            : distributeUnitWidths(
+                totalIn,
+                newTypes.map((t) => t === "door"),
+              );
+          return { ...w, unitTypes: newTypes, unitWidths: newWidths };
         }),
       },
     }));
@@ -726,16 +829,56 @@ export function useConfigureState() {
       ...prev,
       screenRoom: {
         ...prev.screenRoom,
-        chairrail: { ...prev.screenRoom.chairrail, ...update },
+        chairrail: {
+          ...prev.screenRoom.chairrail,
+          ...update,
+          walls:
+            update.enabled === undefined
+              ? prev.screenRoom.chairrail.walls
+              : update.enabled
+                ? prev.screenRoom.chairrail.walls.length
+                  ? prev.screenRoom.chairrail.walls
+                  : prev.screenRoom.walls.map((w) => w.id)
+                : [],
+        },
       },
     }));
+
+  /** Toggle a rail on ONE wall. Rails are per-wall, never per-unit. */
+  const setScreenRailWall = (
+    rail: "handrail" | "chairrail",
+    wallId: string,
+    on: boolean,
+  ) =>
+    setState((prev) => {
+      const cur = prev.screenRoom[rail].walls;
+      const walls = on
+        ? cur.includes(wallId)
+          ? cur
+          : [...cur, wallId]
+        : cur.filter((id) => id !== wallId);
+      return {
+        ...prev,
+        screenRoom: {
+          ...prev.screenRoom,
+          [rail]: { ...prev.screenRoom[rail], walls },
+        },
+      };
+    });
 
   const setScreenHandrail = (enabled: boolean) =>
     setState((prev) => ({
       ...prev,
       screenRoom: {
         ...prev.screenRoom,
-        handrail: { enabled },
+        handrail: {
+          enabled,
+          walls: enabled
+            ? prev.screenRoom.handrail.walls.length
+              ? prev.screenRoom.handrail.walls
+              : prev.screenRoom.walls.map((w) => w.id)
+            : [],
+        },
         // Handrail trumps chairrail — disable chairrail when handrail is turned on
         chairrail: enabled
           ? { ...prev.screenRoom.chairrail, enabled: false }
@@ -976,7 +1119,10 @@ export function useConfigureState() {
         if (w.id !== wallId) return w;
         const newStyles = [...w.unitDoorStyles];
         newStyles[unitIndex] = style;
-        return { ...w, unitDoorStyles: newStyles };
+        // entry/storm take the fixed 36in leaf; switching to or from one changes
+        // this unit's width, so the rest of the wall re-shares what is left.
+        const withStyle = { ...w, unitDoorStyles: newStyles };
+        return { ...withStyle, unitWidths: relayoutGlassWidths(withStyle) };
       });
 
       const wallAddOns = { ...prev.wallAddOns };
@@ -1074,10 +1220,17 @@ export function useConfigureState() {
         const newGable = w.gableGlass
           ? { ...w.gableGlass, count: clamped }
           : null;
-        return {
+        const relaid = {
           ...w,
           units: clamped,
           unitWidths: newWidths,
+          panelTypes: newPanelTypes,
+          unitDoorStyles: newDoorStyles,
+        };
+        return {
+          ...w,
+          units: clamped,
+          unitWidths: relayoutGlassWidths(relaid),
           unitLocked: newLocked,
           panelTypes: newPanelTypes,
           unitMaterials: newMaterials,
@@ -1141,7 +1294,8 @@ export function useConfigureState() {
         const newPanelTypes = w.panelTypes.map((pt, i) =>
           i === unitIndex ? panelTypeId : pt,
         );
-        return { ...w, panelTypes: newPanelTypes };
+        const withType = { ...w, panelTypes: newPanelTypes };
+        return { ...withType, unitWidths: relayoutGlassWidths(withType) };
       });
 
       const updatedWall = updatedWalls.find((w) => w.id === wallId);
@@ -1372,10 +1526,7 @@ export function useConfigureState() {
             o.name.toLowerCase().includes("screen room aluminum handrails"),
           );
           if (handrailOpt) {
-            const totalLinFt = state.screenRoom.walls.reduce(
-              (s, w) => s + inToCeilFt(w.widthIn),
-              0,
-            );
+            const totalLinFt = handrailLinFt(state.screenRoom);
             total += handrailOpt.unit_price * totalLinFt;
           }
         }
@@ -1484,10 +1635,7 @@ export function useConfigureState() {
             o.name.toLowerCase().includes("screen room aluminum handrails"),
           );
           if (handrailOpt) {
-            const totalLinFt = state.screenRoom.walls.reduce(
-              (s, w) => s + inToCeilFt(w.widthIn),
-              0,
-            );
+            const totalLinFt = handrailLinFt(state.screenRoom);
             const cost = handrailOpt.unit_price * totalLinFt;
             if (cost > 0)
               items.push({
@@ -1865,6 +2013,9 @@ export function useConfigureState() {
     // every wall rather than per unit, so they can't ride in wallData.
     const screenOptions = {
       kneewall: state.screenRoom.kneewall,
+      // chairrail/handrail carry `walls` (the ids they are on) so scene.html can
+      // draw them per WALL. An older payload without it means "every wall", which
+      // is how the renderer treats a missing list.
       chairrail: state.screenRoom.chairrail,
       handrail: state.screenRoom.handrail,
     };
@@ -1988,6 +2139,7 @@ export function useConfigureState() {
     setScreenKneewall,
     setScreenChairrail,
     setScreenHandrail,
+    setScreenRailWall,
     setScreenTransom,
     setScreenTransomHeight,
     setScreenGableGlass,

@@ -78,6 +78,46 @@ def drift_score(
     return float((missing.sum() + invented.sum()) / n_ref)
 
 
+def structure_edge_miss(
+    candidate_bytes: bytes, composite_bytes: bytes, structure_mask_bytes: bytes
+) -> float:
+    """Fraction of the COMPOSITE's structural edges that the candidate LOST.
+
+    The config-fidelity ranker for the over-generate pool. Lower = the render kept
+    more of the structure that was drawn. Use it to ORDER candidates, never as an
+    absolute threshold — a flat CGI reference against a photograph always scores
+    high in absolute terms.
+
+    Why not drift_score: that one excludes glass and erodes the region boundary,
+    which is right when comparing two PHOTOREAL images but leaves only featureless
+    white frame interiors against a CGI composite — 37 edges on a real case, under
+    its own 200 minimum, so it returned 0.0 for every candidate. Every structural
+    cue (frame/glass boundaries, door stiles, kneewall band tops, transom sills)
+    lives exactly on the boundary drift_score throws away.
+
+    Only MISSING edges count. A render that adds edges — reflections, siding
+    texture, shadows — is being photorealistic, not drifting. A render that drops
+    the drawn lines has regularized a wall into something else, which is the
+    failure this exists to catch, and it is not door-specific: any config the
+    model flattens away loses the same kind of edges.
+
+    Validated 2026-08-20 on five renders of a known-hard config (an all-door
+    wall): the two that kept the door scored 0.399/0.455, the three that replaced
+    it with windows scored 0.580/0.597/0.667 — a clean gap, correct order.
+    """
+    ref = Image.open(io.BytesIO(composite_bytes)).convert("L")
+    size = ref.size
+    r = np.asarray(ref).astype(np.float32)
+    m = _gray(structure_mask_bytes, size) > 128
+    ref_edges = _edges(r) & m
+    n_ref = int(ref_edges.sum())
+    if n_ref < 200:
+        return 0.0
+    cand_edges = _edges(_gray(candidate_bytes, size)) & m
+    missing = ref_edges & ~_dilate(cand_edges, 2)
+    return float(missing.sum() / n_ref)
+
+
 def gate_passes(final_bytes, reference_bytes, structure_mask_bytes, glass_mask_bytes=None):
     """(ok, score) — ok=False means the finish pass drifted the structure."""
     s = drift_score(final_bytes, reference_bytes, structure_mask_bytes, glass_mask_bytes)

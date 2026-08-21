@@ -1,0 +1,5 @@
+composite (1280, 960) -> letterboxed (1440, 960)
+  g15 (openai/gpt-image-1.5) -> gptfix_g15.jpg  (1280, 960)
+  g2 (openai/gpt-image-2) -> gptfix_g2.jpg  (1280, 960)
+  g1 (openai/gpt-image-1) -> gptfix_g1.jpg  (1280, 960)
+done

@@ -656,9 +656,12 @@
           // only strong "door" cue is a PROMINENT vertical pull handle, off to one
           // (latch) side at grip height. Make it the dominant feature: a long dark
           // metal bar standing well proud so the repaint can't miss it.
-          const handleMat = new THREE.MeshStandardMaterial({
-            color: 0x3a3f45, roughness: 0.3, metalness: 0.6,
-          });
+          // UNLIT dark: as MeshStandardMaterial with metalness 0.6 this washed to
+          // SALMON under the light rig, and the repaint faithfully copied a pink
+          // bar into the render (user 2026-08-20). Same rule the canny C-pull
+          // already follows — door hardware must render as the value we picked,
+          // not whatever the lighting turns it into.
+          const handleMat = new THREE.MeshBasicMaterial({ color: 0x23272c });
           g.add(
             box(fw * 0.6, glH * 0.42, fw * 1.6, handleMat,
                 dx1 - dsw - fw * 0.9, glCY, 0.18), // tall vertical pull, latch side
@@ -721,24 +724,41 @@
             // in-plane rotation that orients the opening.
             const handleX = fw * 2.2;
             const camZ = mirrored ? -1 : 1;
-            // Real sliding doors have no protruding handle on the outside — just
-            // a small flush FINGER-GRIP recess to slide the leaf. So kontext
-            // draws a subtle dark grip on the meeting stile (matching the real
-            // doors), NOT the old protruding bar/C pull. Canny keeps its bold
-            // C-torus purely as an edge cue (its edge map needs a bold shape).
+            // The handle is the ONLY strong "this is a door" cue an all-glass
+            // sliding door has: geometrically it is two panes and a mullion, i.e.
+            // identical to two fixed windows. A flush FINGER-GRIP was tried here
+            // (0.56in wide, on the theory that real sliders have no protruding
+            // handle) and it is SUB-PIXEL in the composite — on a foreshortened
+            // wall, 192in maps to ~250px, so 0.56in is under ONE pixel. The model
+            // had nothing to read and kept painting windows or inventing french
+            // doors (user 2026-08-19, "the door really is struggling"). It also
+            // undid the 2026-08-13 prominent-pull fix that dev-base had validated.
+            // Real Champion sliders DO carry a visible slim vertical pull on the
+            // leading stile (see the real install photos), so this is both more
+            // accurate and legible. Sized to survive the composite: ~1.5in wide,
+            // ~20% of the glass height, dark metal, drawn well proud.
             if (GLASS_STYLE === "kontext") {
-              // Small near-black flush pull on the meeting stile at grip height —
-              // subtle so the repaint copies just a finger grip, not a handle.
-              const gripMat = new THREE.MeshBasicMaterial({ color: 0x0a0c0e });
+              // NOTE: the prominent vertical pull is already drawn by the glass-
+              // door leaf-frame block above (handleMat, latch side) — adding a
+              // second one here gave the door TWO handles. Only the threshold is
+              // added in this branch.
+              // Threshold/track at the floor: the second real door cue, and the
+              // one that separates a door from a window whose glass happens to
+              // reach low. A window never has one. Deliberately NOT a mid-height
+              // rail — that was tried and turned the leaf into a 4-lite window.
+              // Width computed locally: `ddw` lives in the leaf-frame block above
+              // and is NOT in scope here (that ReferenceError threw the whole
+              // scene and 500'd the renderer). Same value: the glass span inside
+              // the two stiles.
               g.add(
                 box(
-                  fw * 0.28,
-                  glH * 0.09,
-                  fw * 0.28,
-                  gripMat,
+                  w - fw * 2,
+                  fw * 0.5,
+                  fw * 0.6,
+                  new THREE.MeshBasicMaterial({ color: 0x6b7075 }),
                   w / 2,
-                  glCY - glH * 0.05,
-                  camZ * (fw * 0.18),
+                  botY + fw * 0.25,
+                  camZ * (fw * 0.3),
                 ),
               );
             } else {
@@ -1052,10 +1072,43 @@
               0,
             ),
           ); // top rail
-        g.add(box(structFw, unitH, 0.12, fmat, structFw / 2, unitH / 2, 0)); // left corner mullion
+        // Corner mullions are drawn PROUD of the solid kneewall band (0.20 vs the
+        // band's 0.16 depth). At 0.12 the band stood in FRONT of the post, so the
+        // band visually ran PAST the corner instead of butting into it — and the
+        // AI repaint duly carried the kneewall around onto the neighbouring wall,
+        // burying a full-height glass door in siding (user 2026-08-19). A real
+        // corner post is the outermost member; making the geometry say so is what
+        // finally gives the band a visible termination.
+        g.add(box(structFw, unitH, 0.2, fmat, structFw / 2, unitH / 2, 0)); // left corner mullion
         g.add(
-          box(structFw, unitH, 0.12, fmat, wallW - structFw / 2, unitH / 2, 0),
+          box(structFw, unitH, 0.2, fmat, wallW - structFw / 2, unitH / 2, 0),
         ); // right corner mullion
+
+        // Kneewall band END CAPS (glass walls). Adjacent solid kneewalls abut into
+        // ONE continuous band by design (see buildPanel), so where that band STOPS
+        // — at a door bay, whose unit has no kneewall — the only cue was the band
+        // box's ~2in deep end FACE, which is invisible at a shallow camera angle.
+        // The AI repaint therefore read the band as continuous and carried it
+        // straight across the door, burying a full-height glass door in siding
+        // (user 2026-08-19; two rounds of instruction wording failed to shift it,
+        // because the pixels genuinely were ambiguous). A real install has a trim
+        // board closing the run at the door jamb — draw it: a vertical cap the
+        // height of the band, standing proud of it so it reads as a termination.
+        // Only at INTERNAL boundaries: the wall ends already have corner mullions.
+        if (!isScreenWall) {
+          kneeInfo.forEach((k, i) => {
+            if (!k || !k.solid) return;
+            const span = unitSpans[i];
+            if (!span) return;
+            const capH = k.top; // fw + kneewall + cap rail
+            const prev = kneeInfo[i - 1];
+            const next = kneeInfo[i + 1];
+            if (prev && !prev.solid)
+              g.add(box(structFw, capH, 0.2, fmat, span.x0 + structFw / 2, capH / 2, 0.02));
+            if (next && !next.solid)
+              g.add(box(structFw, capH, 0.2, fmat, span.x1 - structFw / 2, capH / 2, 0.02));
+          });
+        }
 
         // Pentagon corner posts: on a gable/wing wall whose glass grows DOWN into a
         // flat base, the wall frame above stops at unitH. Run the two corner posts on
@@ -1139,8 +1192,18 @@
             }
           }
 
+          // Rails are chosen PER WALL (user 2026-08-20). `walls` lists the ids
+          // carrying the rail; an older payload has no list, which still means
+          // "every wall" so existing drafts render unchanged.
+          const railOnThisWall = (rail) =>
+            !!rail &&
+            rail.enabled &&
+            (!Array.isArray(rail.walls) ||
+              rail.walls.length === 0 ||
+              rail.walls.includes(wall.wall_id));
+
           const cr = screenOpts.chairrail;
-          if (cr && cr.enabled) {
+          if (railOnThisWall(cr)) {
             // Scale the absolute typed height by the fit; proportional fallback as-is.
             const crIn = parseFloat(cr.heightIn) || 0;
             const cH = crIn > 0 ? (crIn / 12) * hs : wallH * 0.45;
@@ -1151,7 +1214,7 @@
 
           // Handrail trumps chairrail in the configurator (setScreenHandrail), so
           // both never render together. ~36" top rail over evenly spaced pickets.
-          if (screenOpts.handrail && screenOpts.handrail.enabled) {
+          if (railOnThisWall(screenOpts.handrail)) {
             const hH = 3.0 * hs; // ~36in top rail (scaled to the fitted wall)
             const botR = 0.4 * hs; // bottom rail height (scaled)
             const gap = 0.33; // ~4in on-center baluster spacing (was 5.4in)
@@ -2550,8 +2613,16 @@
                 .map((u) => u.transom_h_in || 0)
                 .filter((t) => t > 0);
               if (typed.length) return Math.max(...typed) / 12;
-              const fwFt = (wall.frame_width_in || 0) / 12;
-              return (wallH - fwFt * 2) * 0.18;
+              // buildPanel invents this transom as `h * 0.18`, where h is the
+              // panel height and the panel is inset by the THIN cosmetic frame
+              // (h = unitH - thinFw*2) — NOT the structural one. Using
+              // frame_width_in here predicted a shallower transom than buildPanel
+              // draws, so the gable wall's header missed the straight wall's
+              // transom sill by the difference: on a 6in system 1.26ft predicted
+              // vs 1.38ft drawn, ~1.4in of misalignment at the corner (user
+              // 2026-08-20). Same thin/structural split that broke the branch-B
+              // offset — this fallback was the half I missed then.
+              return (wallH - thinFw((wall.frame_width_in || 0) / 12) * 2) * 0.18;
             };
             // Rule (user-confirmed):
             //   A. Gable wall HAS its own transom → flat 0 = TRIANGLE. Its units

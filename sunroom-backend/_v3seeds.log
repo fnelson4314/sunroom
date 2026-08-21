@@ -1,0 +1,29 @@
+=== v3a ===
+Replicate 429 — backing off 3s (attempt 1/4)
+Replicate 429 — backing off 3s (attempt 1/4)
+  seed 1111 -> v3a_s1111.jpg
+  seed 2222 -> v3a_s2222.jpg
+  seed 3333 -> v3a_s3333.jpg
+  seed 4444 -> v3a_s4444.jpg
+  seed 5555 -> v3a_s5555.jpg
+done
+=== v3c ===
+Replicate 429 — backing off 4s (attempt 1/4)
+Replicate 429 — backing off 3s (attempt 1/4)
+Replicate 429 — backing off 3s (attempt 1/4)
+  seed 1111 -> v3c_s1111.jpg
+  seed 2222 -> v3c_s2222.jpg
+  seed 3333 -> v3c_s3333.jpg
+  seed 4444 -> v3c_s4444.jpg
+  seed 5555 -> v3c_s5555.jpg
+done
+=== v2b ===
+Replicate 429 — backing off 4s (attempt 1/4)
+Replicate 429 — backing off 3s (attempt 1/4)
+Replicate 429 — backing off 3s (attempt 1/4)
+  seed 1111 -> v2b_s1111.jpg
+  seed 2222 -> v2b_s2222.jpg
+  seed 3333 -> v2b_s3333.jpg
+  seed 4444 -> v2b_s4444.jpg
+  seed 5555 -> v2b_s5555.jpg
+done

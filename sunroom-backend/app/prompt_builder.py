@@ -450,7 +450,9 @@ _KONTEXT_DOOR_STYLE = {
 }
 
 
-def _kontext_config_details(wall_data: str, is_screen: bool = False) -> tuple[str, str]:
+def _kontext_config_details(
+    wall_data: str, is_screen: bool = False, wall_combo: str = None
+) -> tuple[str, str]:
     """(kneewall/transom material clause, door clause) read from the SAME config
     the composite is drawn from, so the text reinforces the pixels instead of
     competing with them. Empty strings when the feature isn't present — never
@@ -465,6 +467,14 @@ def _kontext_config_details(wall_data: str, is_screen: bool = False) -> tuple[st
 
     knee_styles, transom_styles, door_styles = set(), set(), set()
     wing_kinds = set()
+    # Walls that are ENTIRELY door. The model regularizes such a wall to match its
+    # neighbours ("sunroom walls have kneewalls") because nothing WITHIN the wall
+    # contradicts that prior — a door sitting beside a window on the same wall
+    # survives, a wall that is only a door does not (user 2026-08-19/20, job 35:
+    # wall C is a single 96in door_t next to four kneewall windows on wall B).
+    # Naming the wall by its camera position is the one thing that contradicts it.
+    all_door_walls = []
+    combo = _resolve_combo(walls, wall_combo)
     for wall in walls:
         panel_types = wall.get("panelTypes", []) or []
         materials = wall.get("unitMaterials", []) or []
@@ -476,6 +486,11 @@ def _kontext_config_details(wall_data: str, is_screen: bool = False) -> tuple[st
                 wing_kinds.add(("solid", (gable.get("solidStyle") or "panel").lower()))
             else:
                 wing_kinds.add(("screen" if is_screen else "glass", ""))
+        if panel_types and all("door" in str(pt) for pt in panel_types):
+            pos = WALL_POSITION_BY_COMBO.get(combo, {}).get(wall.get("id"))
+            if pos:
+                all_door_walls.append(pos)
+
         for i, pt in enumerate(panel_types):
             mat = materials[i] if i < len(materials) else {}
             if mat.get("kneewall") == "solid":
@@ -504,6 +519,11 @@ def _kontext_config_details(wall_data: str, is_screen: bool = False) -> tuple[st
         for d in sorted(door_styles)
         if d in _KONTEXT_DOOR_STYLE
     ]
+    for pos in all_door_walls:
+        door_bits.append(
+            f"the {pos} is entirely that door across its full width, its glass "
+            f"reaching the floor along the whole wall"
+        )
     if door_styles:
         door_bits.append("the only door is the one drawn; every other opening is a window")
     door_detail = "; ".join(door_bits)
@@ -535,11 +555,36 @@ def _kontext_config_details(wall_data: str, is_screen: bool = False) -> tuple[st
     return material_detail, door_detail
 
 
+def build_gpt_instruction(wall_system: str = "", **_ignored) -> str:
+    """SHORT edit instruction for the gpt-image models (FLUX_REPAINT_MODE=gpt).
+
+    Deliberately a fraction of build_kontext_instruction's length. That one grew
+    to ~1900 chars of prohibitions from arguing FLUX Kontext out of things it kept
+    getting wrong; handed to a model that follows instructions literally it
+    competes with the image for attention, and it measurably lost a head-to-head
+    against this wording on the same composite (user 2026-08-20). The config is in
+    the pixels — say "copy this, make it real" and get out of the way.
+
+    The scope sentence is the one addition to the user's own prompt: without it
+    the model repaints the yard and sky too. The pipeline masks that back to the
+    real photo anyway, but a model that is not trying to change the surroundings
+    leaves the mask less to clean up at the structure's edge.
+    """
+    noun = "screened porch" if wall_system == "2_inch" else "sunroom"
+    return (
+        f"Take this 3d composite config wall design and turn it into a "
+        f"photorealistic {noun}: keep the exact structure, framing and panel "
+        f"layout that is drawn. Change ONLY the drawn {noun} itself — the house, "
+        f"yard, patio, plants and sky stay exactly as they are in the photo."
+    )
+
+
 def build_kontext_instruction(
     wall_system: str = "",
     wall_color: str = "white",
     roof_style: str = "",
     wall_data: str = "",
+    wall_combo: str = None,
 ) -> str:
     """Edit instruction for FLUX Kontext (FLUX_REPAINT_MODE=kontext).
 
@@ -605,7 +650,9 @@ def build_kontext_instruction(
         "gutter along the eave"
     )
 
-    material_detail, door_detail = _kontext_config_details(wall_data, is_screen)
+    material_detail, door_detail = _kontext_config_details(
+        wall_data, is_screen, wall_combo
+    )
     extra = "".join(f" {d[0].upper()}{d[1:]}." for d in (material_detail, door_detail) if d)
 
     return (

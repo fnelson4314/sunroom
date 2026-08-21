@@ -207,6 +207,37 @@ export const previewComposite = async (data: {
   return { url: response.data.composite_url, fit: response.data.fit ?? null };
 };
 
+/**
+ * Follow-up change on an existing render, in the salesperson's own words
+ * ("make the kneewall match the house"). Synchronous — one image-model call —
+ * and the result is APPENDED to the session's render list, so every earlier
+ * version stays available in the gallery if a request doesn't land.
+ */
+export const refineRender = async (data: {
+  session_id: string;
+  request: string;
+  source_render_url?: string;
+}): Promise<{ status: string; session_id: string }> => {
+  // Returns immediately — the edit runs as a Celery job. Poll refineStatus.
+  const response = await api.post("/generate/refine", data);
+  return response.data;
+};
+
+export type RefineStatus = {
+  session_id: string;
+  refine_status: "working" | "complete" | "failed" | null;
+  error: string | null;
+  render_url: string | null;
+  render_urls: string[];
+};
+
+export const getRefineStatus = async (
+  sessionId: string,
+): Promise<RefineStatus> => {
+  const response = await api.get(`/generate/refine/status/${sessionId}`);
+  return response.data;
+};
+
 export const getGenerationStatus = async (sessionId: string) => {
   const response = await api.get(`/generate/status/${sessionId}`);
   return response.data;

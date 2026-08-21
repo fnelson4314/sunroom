@@ -1,7 +1,11 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
-from app.tasks import generate_sunroom, render_composite_preview
+from app.tasks import (
+    generate_sunroom,
+    refine_render_task,
+    render_composite_preview,
+)
 from app.database import supabase
 from app.config import validate_uuid
 from app.worker import celery_app
@@ -149,6 +153,79 @@ def preview_composite(
     except Exception as e:
         logger.error(f"Preview render failed: {e}")
         raise HTTPException(status_code=502, detail=f"3D preview failed: {e}")
+
+
+class RefineRequest(BaseModel):
+    session_id: str
+    request: str
+    source_render_url: Optional[str] = None
+
+
+@router.post("/refine")
+def refine(
+    body: RefineRequest,
+    key: str = Depends(require_api_key),
+    _rl: None = Depends(rate_limit(GENERATE_MAX_PER_WINDOW, GENERATE_WINDOW_SECONDS)),
+):
+    """Queue a follow-up edit of an existing render, in the salesperson's words.
+
+    ASYNC (Celery + polling), like /generate rather than /preview: the edit is a
+    full image-model call at ~128s, and a held-open request that long is lost to a
+    phone locking or a sleeping tab while the work completes invisibly. Returns
+    immediately; the client polls /generate/refine/status/{session_id}.
+
+    Rate-limited on the same budget as /generate — it spends the same credits.
+    """
+    validate_uuid(body.session_id)
+    text = (body.request or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Describe the change you want")
+    if len(text) > 300:
+        raise HTTPException(
+            status_code=400, detail="Keep the change request under 300 characters"
+        )
+    try:
+        refine_render_task.delay(body.session_id, text, body.source_render_url)
+        return {"status": "queued", "session_id": body.session_id}
+    except Exception as e:
+        logger.error(f"Could not queue refine: {e}")
+        raise HTTPException(status_code=500, detail="Could not queue the change")
+
+
+@router.get("/refine/status/{session_id}")
+def refine_status(session_id: str, key: str = Depends(require_api_key)):
+    """Poll a queued change request. Mirrors /generate/status' shape so the
+    frontend can reuse the same polling pattern.
+
+    `refine_status` is "working" | "complete" | "failed" (absent = never run).
+    render_urls always comes back as a list so the gallery can just render it.
+    """
+    validate_uuid(session_id)
+    try:
+        try:
+            result = supabase.table("configurations")                .select("id, refine_status, refine_error, render_url, render_urls")                .eq("id", session_id).execute()
+        except Exception:
+            # refine_status/refine_error not migrated yet — degrade to the renders
+            result = supabase.table("configurations")                .select("id, render_url, render_urls")                .eq("id", session_id).execute()
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        row = result.data[0]
+        urls = row.get("render_urls")
+        if not urls:
+            single = row.get("render_url")
+            urls = [single] if single else []
+        return {
+            "session_id": row["id"],
+            "refine_status": row.get("refine_status"),
+            "error": row.get("refine_error"),
+            "render_url": row.get("render_url"),
+            "render_urls": urls,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Refine status failed: {e}")
+        raise HTTPException(status_code=500, detail="Could not read change status")
 
 
 @router.get("/status/{session_id}")

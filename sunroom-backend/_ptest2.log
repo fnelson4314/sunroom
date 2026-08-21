@@ -1,0 +1,8 @@
+composite (1280, 960) -> letterboxed (1440, 960)
+  g15/userp -> ptest2_g15_userp.jpg
+  g15/full -> ptest2_g15_full.jpg
+  g2/userp -> ptest2_g2_userp.jpg
+  g2/full -> ptest2_g2_full.jpg
+  g1/userp -> ptest2_g1_userp.jpg
+  g1/full -> ptest2_g1_full.jpg
+done

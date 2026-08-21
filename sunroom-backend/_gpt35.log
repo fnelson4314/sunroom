@@ -1,0 +1,4 @@
+Replicate 429 — backing off 10s (attempt 1/4)
+  full_hi FAILED: Replicate rejected the request (422) — check input fields: {"detail":"- input: openai_api_key is required\n- input.aspect_ratio: aspect_ratio must be one of the following: \"1:1\", \"3:2\", \"2:3\"\n-
+  short_hi FAILED: Replicate rejected the request (422) — check input fields: {"detail":"- input: openai_api_key is required\n- input.aspect_ratio: aspect_ratio must be one of the following: \"1:1\", \"3:2\", \"2:3\"\n-
+done

@@ -490,7 +490,10 @@ def composite_bytes_masked(top_bytes: bytes, base_bytes: bytes, mask_bytes: byte
     out = Image.composite(top, base, mask)
 
     buf = io.BytesIO()
-    out.save(buf, format="JPEG", quality=95)
+    # subsampling=0 (4:4:4). The default 4:2:0 smears chroma across the thin
+    # frame/mullion lines, and a refinement chain re-encodes those same lines
+    # once per edit.
+    out.save(buf, format="JPEG", quality=95, subsampling=0)
     return buf.getvalue()
 
 
@@ -558,6 +561,14 @@ def run_flux_control_dev(
 # kneewall, drift 0.102) — the config gate catches any such rewrite and falls
 # back to the guaranteed assembly, so the prompt's job is to maximize the
 # hold rate, not to be the safety mechanism.
+# aspect_ratio values gpt-image-2 accepts (Replicate schema, 2026-08-21).
+# Used to pick the nearest one to the source so nothing has to be padded.
+GPT_IMAGE_RATIOS = {
+    "1:1": 1.0, "3:2": 1.5, "2:3": 2 / 3, "4:3": 4 / 3,
+    "3:4": 0.75, "16:9": 16 / 9, "9:16": 9 / 16,
+}
+
+
 NANO_FINISH_PROMPT = (
     "Make this look like a crisp professional real-estate photograph. Improve "
     "material realism, lighting and texture only. Keep every structural element "
@@ -566,6 +577,78 @@ NANO_FINISH_PROMPT = (
     "do not add, remove, move, resize or merge anything, and do not change the "
     "house, yard or background."
 )
+
+
+def run_gpt_image(image_url: str, prompt: str, model_slug: str = None) -> str:
+    """OpenAI gpt-image edit of the 3D composite (FLUX_REPAINT_MODE=gpt).
+
+    Chosen over the FLUX Kontext family after a head-to-head on a hard config
+    (2026-08-20, user): gpt-image-2 held the drawn layout where every Kontext
+    variant and every paired-LoRA checkpoint regularized a whole-wall door into
+    windows. It follows the picture instead of needing to be argued with.
+
+    PROMPT LENGTH is the one thing to be careful with here: deliberately SHORT.
+    The long Kontext instruction is 1900 chars of prohibitions accumulated from
+    arguing with FLUX; handed to a model that follows literally it competes with
+    the image for attention and did measurably worse in the A/B.
+    build_gpt_instruction() keeps it to two lines.
+
+    This used to LETTERBOX 4:3 -> 3:2 and crop back, on the belief that these
+    models only emit 1:1/3:2/2:3. Not true for gpt-image-2 (verified against the
+    Replicate schema AND a live call, 2026-08-21): aspect_ratio takes 4:3 and
+    returns 1536x1152. Dropping the letterbox removes a pad, a crop and two JPEG
+    round-trips per call — which is most of the chained-refinement "ghosting",
+    since a refine feeds its own output back in and the losses compounded.
+    """
+    import io as _io
+    import uuid as _uuid
+
+    from PIL import Image as _Image
+
+    from app.database import supabase
+
+    model = model_slug or os.getenv("GPT_IMAGE_MODEL", "openai/gpt-image-2")
+    key = os.getenv("OPENAI_API_KEY")
+    if not key:
+        raise Exception("OPENAI_API_KEY missing — required by the gpt-image models")
+
+    # Header read only — the source URL is already public, so it goes to the
+    # model untouched. We just need its shape to pick the ratio and to hand the
+    # caller back the size it passed in.
+    with httpx.Client(timeout=60) as client:
+        src = _Image.open(_io.BytesIO(client.get(image_url).content))
+        src_size = src.size
+
+    ar = src_size[0] / src_size[1]
+    ratio = min(GPT_IMAGE_RATIOS, key=lambda r: abs(GPT_IMAGE_RATIOS[r] - ar))
+
+    input_data = {
+        "prompt": prompt,
+        "input_images": [image_url],
+        "aspect_ratio": ratio,
+        "quality": os.getenv("GPT_IMAGE_QUALITY", "high"),
+        "output_format": "png",
+        "number_of_images": 1,
+        "openai_api_key": key,
+    }
+    # gpt-image-2 has no input_fidelity input; 1.5 and 1 do.
+    if "gpt-image-2" not in model:
+        input_data["input_fidelity"] = os.getenv("GPT_IMAGE_FIDELITY", "high")
+
+    logger.info(f"{model} edit ({src_size}, aspect_ratio={ratio})")
+    out_url = run_model_prediction(model, input_data)
+
+    with httpx.Client(timeout=180) as client:
+        out = _Image.open(_io.BytesIO(client.get(out_url).content)).convert("RGB")
+    if out.size != src_size:
+        out = out.resize(src_size, _Image.LANCZOS)
+    buf = _io.BytesIO()
+    out.save(buf, "PNG")
+    final_path = f"debug-composites/gptout-{_uuid.uuid4()}.png"
+    supabase.storage.from_("renders").upload(
+        final_path, buf.getvalue(), {"content-type": "image/png"}
+    )
+    return supabase.storage.from_("renders").get_public_url(final_path)
 
 
 def run_nano_banana(model_slug: str, image_url: str, prompt: str) -> str:

@@ -9,12 +9,14 @@ import type {
   SolidMaterial,
 } from "@/hooks/useConfigureState";
 import {
+  handrailLinFt,
   inToCeilFt,
   inToFtLabel,
   screenGableFlatIn,
 } from "@/hooks/useConfigureState";
 import React, { useEffect } from "react";
 import {
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -572,6 +574,12 @@ interface ScreenRoomBuilderProps {
   onKneewallSolidStyle: (style: SolidMaterial) => void;
   onChairrailChange: (update: { enabled?: boolean; heightIn?: string }) => void;
   onHandrailChange: (enabled: boolean) => void;
+  /** Toggle a rail on ONE wall — rails are chosen per wall, never per unit. */
+  onRailWallChange: (
+    rail: "handrail" | "chairrail",
+    wallId: string,
+    on: boolean,
+  ) => void;
   onTransomChange: (enabled: boolean) => void;
   onTransomHeightChange: (value: string) => void;
   onGableGlassChange: (
@@ -602,6 +610,7 @@ export default function ScreenRoomBuilder({
   onKneewallSolidStyle,
   onChairrailChange,
   onHandrailChange,
+  onRailWallChange,
   onTransomChange,
   onTransomHeightChange,
   onGableGlassChange,
@@ -753,7 +762,9 @@ export default function ScreenRoomBuilder({
       : -1;
 
   // Pricing
-  const totalLinFt = walls.reduce((s, w) => s + inToCeilFt(w.widthIn), 0);
+  // Mirrors handrailLinFt in useConfigureState: only the walls the rail is on,
+  // and a 36in door leaf comes off each door (no handrail across a doorway).
+  const totalLinFt = handrailLinFt(screenRoom);
   const totalDoors = walls.reduce(
     (s, w) => s + w.unitTypes.filter((t) => t === "door").length,
     0,
@@ -1360,7 +1371,7 @@ export default function ScreenRoomBuilder({
                 label={
                   screenRoom.handrail.enabled
                     ? "Chairrail (disabled — handrail active)"
-                    : "Chairrail (all walls)"
+                    : "Chairrail"
                 }
                 checked={
                   !screenRoom.handrail.enabled && screenRoom.chairrail.enabled
@@ -1386,19 +1397,32 @@ export default function ScreenRoomBuilder({
                     </Text>
                   )}
                 </View>
+                <RailWallPicker
+                  walls={walls}
+                  selected={screenRoom.chairrail.walls}
+                  onToggle={(id, on) => onRailWallChange("chairrail", id, on)}
+                />
               </CheckboxRow>
 
               {/* Handrail */}
               <CheckboxRow
-                label="Handrail (36″, all walls)"
+                label="Handrail (36″)"
                 checked={screenRoom.handrail.enabled}
                 onToggle={() => onHandrailChange(!screenRoom.handrail.enabled)}
               >
+                <RailWallPicker
+                  walls={walls}
+                  selected={screenRoom.handrail.walls}
+                  onToggle={(id, on) => onRailWallChange("handrail", id, on)}
+                />
                 {handrailOption && totalLinFt > 0 && (
                   <View style={styles.priceNote}>
                     <Text style={styles.priceNoteText}>
                       ${handrailOption.unit_price.toLocaleString()}/lin ft ×{" "}
                       {totalLinFt} ft = ${handrailCost.toLocaleString()}
+                    </Text>
+                    <Text style={styles.priceNoteText}>
+                      selected walls, less 36″ per door
                     </Text>
                   </View>
                 )}
@@ -1461,6 +1485,42 @@ export default function ScreenRoomBuilder({
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
+
+/**
+ * Per-wall rail selector. Rails are chosen per WALL (never per unit), so a
+ * chairrail or handrail can run on the front wall only, both sides, etc.
+ */
+function RailWallPicker({
+  walls,
+  selected,
+  onToggle,
+}: {
+  walls: { id: string }[];
+  selected: string[];
+  onToggle: (wallId: string, on: boolean) => void;
+}) {
+  return (
+    <View style={styles.railWallRow}>
+      <Text style={styles.dimLabel}>On walls</Text>
+      <View style={styles.railWallChips}>
+        {walls.map((w) => {
+          const on = selected.includes(w.id);
+          return (
+            <Pressable
+              key={w.id}
+              onPress={() => onToggle(w.id, !on)}
+              style={[styles.railChip, on && styles.railChipOn]}
+            >
+              <Text style={[styles.railChipText, on && styles.railChipTextOn]}>
+                Wall {w.id}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
 
 const styles = StyleSheet.create({
   container: { gap: 12 },
@@ -1615,6 +1675,19 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
+  railWallRow: { marginTop: 10, gap: 6 },
+  railWallChips: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
+  railChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.background,
+  },
+  railChipOn: { borderColor: Colors.primary, backgroundColor: Colors.primary },
+  railChipText: { fontSize: FontSize.body, color: Colors.text.secondary },
+  railChipTextOn: { color: Colors.white, fontWeight: "600" },
   heightInputRow: {
     flexDirection: "row",
     alignItems: "center",

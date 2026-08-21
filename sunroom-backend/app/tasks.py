@@ -1,12 +1,17 @@
 from app.worker import celery_app
 from app.database import supabase
-from app.prompt_builder import build_prompt, build_kontext_instruction
+from app.prompt_builder import (
+    build_prompt,
+    build_gpt_instruction,
+    build_kontext_instruction,
+)
 from app.replicate_service import (
     prepare_and_mask,
     run_flux_fill_lora,
     run_flux_control_dev,
     run_flux_kontext,
     run_flux_polish,
+    run_gpt_image,
     run_nano_banana,
     run_topaz_upscale,
     NANO_FINISH_PROMPT,
@@ -18,7 +23,11 @@ from app.replicate_service import (
     union_masks,
 )
 from app.config import validate_uuid
-from app.config_gate import gate_passes, glass_hallucination_score
+from app.config_gate import (
+    gate_passes,
+    glass_hallucination_score,
+    structure_edge_miss,
+)
 import httpx
 import uuid
 import base64
@@ -225,6 +234,138 @@ def render_composite_preview(
         "composite_url": supabase.storage.from_("renders").get_public_url(path),
         "fit": body.get("fit"),
     }
+
+
+@celery_app.task(bind=True, max_retries=0, name="app.tasks.refine_render_task")
+def refine_render_task(self, session_id: str, request_text: str,
+                       source_render_url: str = None) -> dict:
+    """Celery wrapper around refine_render.
+
+    The edit is a full image-model call — measured at ~128s — so holding an HTTP
+    request open for it is fragile: a phone locking, a tab sleeping or a dropped
+    connection loses the response while the work completes invisibly (exactly
+    what happened on the first synchronous version, user 2026-08-20). Same
+    pattern as generate_sunroom: the client polls instead.
+
+    Progress lives on the session row's `refine_status` so /refine/status can
+    report it without a second table.
+    """
+    def _set(**fields):
+        try:
+            supabase.table("configurations").update(fields)                .eq("id", session_id).execute()
+        except Exception as e:
+            logger.warning(f"[{session_id}] refine status write failed: {e}")
+
+    _set(refine_status="working", refine_error=None)
+    try:
+        result = refine_render(session_id, request_text, source_render_url)
+        _set(refine_status="complete")
+        return result
+    except Exception as e:
+        logger.error(f"[{session_id}] refine failed: {e}")
+        _set(refine_status="failed", refine_error=str(e)[:400])
+        raise
+
+
+def refine_render(
+    session_id: str,
+    request_text: str,
+    source_render_url: str = None,
+) -> dict:
+    """Salesperson-driven follow-up edit of an EXISTING render.
+
+    Feeds the previous RENDER back to the image model (not the composite), so
+    everything already correct is preserved and only the requested thing changes
+    — the same conversational loop that made ChatGPT feel good to work with.
+
+    Synchronous: one model call, a few seconds, so the client just awaits it. The
+    structure mask for the background re-lock is regenerated locally from the
+    session's own draft_state — free, no AI, no credits — which is why refining
+    does not need the original render's masks to have been stored.
+
+    The salesperson's text is DATA, not instructions to the pipeline: it is
+    embedded inside our own scoped sentence, never used as the whole prompt.
+    """
+    row = supabase.table("configurations").select("*").eq("id", session_id)        .execute().data
+    if not row:
+        raise ValueError("session not found")
+    row = row[0]
+    ds = row.get("draft_state") or {}
+    meta = ds.get("_meta") or {}
+
+    urls = row.get("render_urls") or ([row["render_url"]] if row.get("render_url") else [])
+    src = source_render_url or (urls[-1] if urls else None)
+    if not src:
+        raise ValueError("no existing render to refine")
+
+    request_text = (request_text or "").strip()
+    if not request_text:
+        raise ValueError("no change requested")
+
+    prompt = (
+        f"In this photo of a sunroom: {request_text}. "
+        "Change nothing else — the structure, framing, panel layout, doors, "
+        "roof, house, yard and sky all stay exactly as they are."
+    )
+    logger.info(f"[{session_id}] refine: {prompt}")
+    out_url = run_gpt_image(src, prompt)
+
+    # Background re-lock, same as a generate. Rebuild the mask from the config.
+    try:
+        photo_url = row.get("house_photo_url") or meta.get("photoUri")
+        pts, single_wall, roofline = _parse_capture(meta.get("wall_corners") or "")
+        if photo_url and pts:
+            resized_url, _ = prepare_and_mask(
+                photo_url,
+                float(meta.get("box_x1") or 0), float(meta.get("box_y1") or 0),
+                float(meta.get("box_x2") or 1), float(meta.get("box_y2") or 1),
+            )
+            with httpx.Client(timeout=30) as c:
+                photo_bytes = c.get(resized_url).content
+            pl = ds.get("selectedProductLine") or {}
+            payload = _render_payload(
+                photo_bytes, pts, single_wall, roofline,
+                json.dumps(ds.get("walls") or []), pl.get("wall_system") or "4_inch",
+                ds.get("wallColor") or "white", ds.get("roofStyle") or "gable",
+                str((float(ds.get("mountHeight") or 0)) / 12),
+                ds.get("projectionDistance") or "",
+                ds.get("includeGableWings", True), ds.get("wallCombo"), None,
+            )
+            with httpx.Client(timeout=90) as c:
+                rr = c.post(f"{RENDERER_3D_URL}/render", json=payload,
+                            headers={"Content-Type": "application/json"})
+                rr.raise_for_status()
+                rj = rr.json()
+            smask = base64.b64decode(rj["mask"]) if rj.get("mask") else None
+            shmask = base64.b64decode(rj["shadowMask"]) if rj.get("shadowMask") else None
+            lock = smask
+            if smask and shmask:
+                try:
+                    lock = union_masks(smask, shmask)
+                except Exception:
+                    pass
+            if lock:
+                composited = composite_masked(out_url, photo_bytes, lock)
+                path = f"renders/{uuid.uuid4()}.jpg"
+                supabase.storage.from_("renders").upload(
+                    path, composited, {"content-type": "image/jpeg"}
+                )
+                out_url = supabase.storage.from_("renders").get_public_url(path)
+    except Exception as relock_err:
+        # The edit itself is still valid without the re-lock; ship it rather than
+        # failing the whole request.
+        logger.warning(f"[{session_id}] refine re-lock skipped ({relock_err})")
+
+    # Append, never replace — every version stays reachable in the editor gallery
+    # so a bad request costs nothing but the one call.
+    new_urls = [*urls, out_url]
+    try:
+        supabase.table("configurations").update(
+            {"render_urls": new_urls, "render_url": out_url}
+        ).eq("id", session_id).execute()
+    except Exception:
+        supabase.table("configurations").update({"render_url": out_url})            .eq("id", session_id).execute()
+    return {"render_url": out_url, "render_urls": new_urls}
 
 
 @celery_app.task(bind=True, max_retries=2, name="app.tasks.generate_sunroom")
@@ -471,12 +612,18 @@ def generate_sunroom(
         # sunroom from the ORIGINAL photo, so the house/pool/sky stay pixel-
         # identical and any stray text artifacts are discarded. For controlnet
         # mode this is required (the model renoises the whole frame).
-        needs_composite = FLUX_REPAINT_MODE in ("full", "controlnet", "kontext", "photoreal")
+        needs_composite = FLUX_REPAINT_MODE in (
+            "full", "controlnet", "kontext", "photoreal", "gpt",
+        )
 
         # Kontext mode: instruction-based image EDIT of the composite. Short
         # instruction — the composite image itself carries the config.
         kontext_instruction = None
-        if FLUX_REPAINT_MODE == "kontext":
+        if FLUX_REPAINT_MODE == "gpt":
+            # Short on purpose — see build_gpt_instruction.
+            kontext_instruction = build_gpt_instruction(wall_system=wall_system)
+            logger.info(f"[{session_id}] GPT instruction: {kontext_instruction}")
+        elif FLUX_REPAINT_MODE == "kontext":
             kontext_instruction = build_kontext_instruction(
                 wall_system=wall_system,
                 wall_color=wall_color,
@@ -487,6 +634,8 @@ def generate_sunroom(
                 # words the model copied the house's siding and invented door
                 # types (user 2026-08-19).
                 wall_data=wall_data,
+                # Lets the instruction name a door wall by its camera position.
+                wall_combo=wall_combo,
             )
             logger.info(f"[{session_id}] Kontext instruction: {kontext_instruction}")
 
@@ -524,6 +673,11 @@ def generate_sunroom(
                     if FLUX_POLISH
                     else inpaint_image_url
                 )
+            elif FLUX_REPAINT_MODE == "gpt":
+                # OpenAI gpt-image edit. Held the drawn config on a whole-wall
+                # door where every Kontext variant and every LoRA checkpoint
+                # regularized it away (user A/B, 2026-08-20).
+                out_url = run_gpt_image(inpaint_image_url, kontext_instruction)
             elif FLUX_REPAINT_MODE == "kontext":
                 # Glass-pass model (bake-off winner 2026-08-15: nano-banana-pro —
                 # clearly the most photoreal glass/roof; structure comes from the
@@ -719,7 +873,59 @@ def generate_sunroom(
         # Regional path: rank by the DETERMINISTIC in-glass hallucination score
         # (lower = cleaner panes) instead of the VLM judge — free, instant, and
         # it measures exactly the one thing the AI can still get wrong here.
+        # STRUCTURE-FIDELITY RANKING (2026-08-20) — the general config filter.
+        # Measured on job 35: identical seeds pass/fail across THREE different LoRA
+        # checkpoints, so a wall coming back wrong is sampling variance, not model
+        # quality — ~2 in 5 draws hold a hard config. Variance is beaten by
+        # selection, so generate a pool and keep the draw that best preserved the
+        # DRAWN STRUCTURE. drift_score measures edge disagreement inside
+        # structure-minus-glass, which is where every config decision lives:
+        # frames, mullions, kneewall bands, transom bands, gable divisions, door
+        # stiles. Glass is excluded because reflections legitimately vary.
+        #
+        # Deliberately NOT door-specific. A door wall was the case that surfaced
+        # this, but any config the model regularizes away (a lone solid panel, an
+        # odd transom, a wing) moves the same edges and ranks the same way.
+        #
+        # The absolute number is meaningless here (flat CGI vs a photograph scores
+        # ~0.2 even when perfect) — only the ORDER across candidates matters, and
+        # they all share the same composite, so the CGI-vs-photo penalty is common
+        # to all of them and cancels out of the comparison.
+        structure_scores: dict[int, float] = {}
         if (
+            OVERGEN_FILTER
+            and len(render_urls) > NUM_VARIATIONS
+            and composite_bytes is not None
+            and render_mask_bytes is not None
+        ):
+            for i, u in enumerate(results):
+                if not u:
+                    continue
+                try:
+                    with httpx.Client(timeout=60) as c:
+                        cand = c.get(u).content
+                    structure_scores[i] = structure_edge_miss(
+                        cand, composite_bytes, render_mask_bytes
+                    )
+                except Exception as sc_err:
+                    logger.warning(
+                        f"[{session_id}] structure score failed for v{i}: {sc_err}"
+                    )
+            if len(structure_scores) >= NUM_VARIATIONS:
+                order = sorted(structure_scores, key=lambda i: structure_scores[i])
+                kept_idx = sorted(order[:NUM_VARIATIONS])
+                logger.info(
+                    f"[{session_id}] overgen filter (structure fidelity): kept "
+                    f"{kept_idx} of {len(render_urls)} — scores "
+                    + ", ".join(
+                        f"v{i}={structure_scores[i]:.3f}"
+                        + ("  <-- kept" if i in kept_idx else "")
+                        for i in sorted(structure_scores)
+                    )
+                )
+                render_urls = [results[i] for i in kept_idx]
+
+        if not structure_scores and (
             OVERGEN_FILTER
             and len(render_urls) > NUM_VARIATIONS
             and REGIONAL_GLASS
@@ -736,7 +942,7 @@ def generate_sunroom(
                 f"(scores {[round(glass_scores.get(i, -1), 4) for i in kept_idx]})"
             )
             render_urls = [results[i] for i in kept_idx]
-        elif OVERGEN_FILTER and len(render_urls) > NUM_VARIATIONS:
+        elif not structure_scores and OVERGEN_FILTER and len(render_urls) > NUM_VARIATIONS:
             try:
                 from app.judge import score_render
 

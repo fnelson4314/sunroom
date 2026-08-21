@@ -108,6 +108,7 @@ export default function Step5Walls({
           onKneewallSolidStyle={configure.setScreenKneewallSolidStyle}
           onChairrailChange={configure.setScreenChairrail}
           onHandrailChange={configure.setScreenHandrail}
+          onRailWallChange={configure.setScreenRailWall}
           onTransomChange={configure.setScreenTransom}
           onTransomHeightChange={configure.setScreenTransomHeight}
           onGableGlassChange={(wallId, config) =>

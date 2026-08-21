@@ -1,0 +1,12 @@
+=== kontext-max ===
+  seed 1111 -> j35max_s1111.jpg
+  seed 4444 -> j35max_s4444.jpg
+done
+=== kontext-pro ===
+  seed 1111 -> j35pro_s1111.jpg
+  seed 4444 -> j35pro_s4444.jpg
+done
+=== v2 LoRA ===
+  seed 1111 -> j35lora_s1111.jpg
+  seed 4444 -> j35lora_s4444.jpg
+done

@@ -11,7 +11,7 @@ from app.replicate_service import run_model_prediction
 
 REVIEW = Path(r"C:\Users\fnels\LORA_review")
 OUT = Path("_ab_models_out"); OUT.mkdir(exist_ok=True)
-PICKS = {3: "as_gable"}  # job 35: hardieboard kneewall + pentagon gable + transom
+PICKS = {3: "as_gable", 7: "ts_gable"}  # both sliding-door jobs
 manifest = json.loads((REVIEW / "manifest.json").read_text())
 
 gap = {}
@@ -20,7 +20,7 @@ for idx, tag in PICKS.items():
     comp = sorted((REVIEW / "images").glob(f"{idx:02d}_*_composite.jpg"))[0]
     photo = sorted((REVIEW / "images").glob(f"{idx:02d}_*_photo.jpg"))[0]
 
-    path = f"lora-test/gap7-{tag}-{uuid.uuid4().hex[:8]}.jpg"
+    path = f"lora-test/gap9-{tag}-{uuid.uuid4().hex[:8]}.jpg"
     supabase.storage.from_("renders").upload(
         path, comp.read_bytes(), {"content-type": "image/jpeg"})
     url = supabase.storage.from_("renders").get_public_url(path)
@@ -39,7 +39,7 @@ for idx, tag in PICKS.items():
         "prompt": instr, "input_image": url,
         "aspect_ratio": "match_input_image", "output_format": "jpg", "seed": 1111,
     })
-    dest = OUT / f"gap7_{tag}.jpg"
+    dest = OUT / f"gap9_{tag}.jpg"
     dest.write_bytes(httpx.get(out_url, timeout=120).content)
     gap[tag] = {"composite": comp.name, "photo": photo.name, "name": m["session_name"],
                 "wall_system": m.get("wall_system") or "4_inch",
@@ -47,5 +47,5 @@ for idx, tag in PICKS.items():
                 "wall_color": m.get("wall_color") or "white"}
     print(f"  -> {dest.name}")
 
-(REVIEW / "gap7.json").write_text(json.dumps(gap, indent=1))
+(REVIEW / "gap9.json").write_text(json.dumps(gap, indent=1))
 print("\ndone")
